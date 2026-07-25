@@ -312,6 +312,20 @@ function decode(s){const t=el('textarea');t.innerHTML=s||'';return t.value;}
 function load(k,def){try{return JSON.parse(localStorage.getItem(k))??def;}catch(e){return def;}}
 function fmtTime(sec){sec=Math.max(0,Math.floor(sec||0));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
 function cleanTitle(t){return decode(t).replace(/\s*[\(\[][^)\]]*(official|lyric|audio|video|mv|m\/v|visualizer|hd|4k)[^)\]]*[\)\]]/gi,'').trim();}
+
+/* Keep results that look like real songs (à la Spotify / YouTube Music) and drop
+   reactions, covers, live clips, sped-up edits, hour-long mixes, etc. Then rank
+   the "actual song" sources first: "- Topic" (YT Music audio) > VEVO > Official. */
+const JUNK=/(\breaction\b|\breacts\b|live at |live from |live performance|live session|\(live\b|karaoke|cover by |sped ?up|slowed|nightcore|\b8d\b|\d+\s*hours?\b|full album|mega ?mix|\bdj mix\b|tutorial|guitar lesson|piano lesson|behind the scenes|making of|\bamv\b|documentary|teaser|trailer|\bvlog\b|podcast)/i;
+function trackScore(t){const ch=t.artist||'',ti=t.title||''; let s=0;
+  if(/ - topic$/i.test(ch)) s+=5; else if(/vevo/i.test(ch)) s+=2; else if(/official/i.test(ch)) s+=1;
+  if(/official audio/i.test(ti)) s+=2; if(/official (music )?video/i.test(ti)) s-=0.5;
+  return s;}
+function refineSongs(items){
+  let f=items.filter(t=>!JUNK.test(t.title||''));
+  if(!f.length) f=items.slice();                          // never return an empty list
+  return f.map((t,i)=>({t,s:trackScore(t),i})).sort((a,b)=>b.s-a.s||a.i-b.i).map(x=>x.t);
+}
 function persistLiked(){localStorage.setItem(K.liked,JSON.stringify(liked));}
 function persistPls(){localStorage.setItem(K.pls,JSON.stringify(playlists));}
 function persistCache(){
@@ -443,13 +457,14 @@ async function ytSearch(q,type,key){
   if(type==='song')p.set('videoCategoryId','10');
   const res=await fetch(`${API}/search?${p}`); if(!res.ok) throw await apiError(res);
   const d=await res.json();
-  return (d.items||[]).map(it=>mapYT(it,type)).filter(Boolean);
+  const items=(d.items||[]).map(it=>mapYT(it,type)).filter(Boolean);
+  return type==='song' ? refineSongs(items) : items;
 }
 async function ytChannelUploads(channelId,key){
   const p=new URLSearchParams({key,part:'snippet',channelId,type:'video',order:'viewCount',maxResults:'24',videoCategoryId:'10'});
   const res=await fetch(`${API}/search?${p}`); if(!res.ok) throw await apiError(res);
   const d=await res.json();
-  return (d.items||[]).map(it=>mapYT(it,'song')).filter(Boolean);
+  return refineSongs((d.items||[]).map(it=>mapYT(it,'song')).filter(Boolean));
 }
 async function ytPlaylistItems(playlistId,key){
   const p=new URLSearchParams({key,part:'snippet',playlistId,maxResults:'50'});
@@ -494,7 +509,8 @@ const listId = u=>{const m=(u||'').match(/[?&]list=([^&]+)/); return m?m[1]:null
 async function pipedSearch(q,type){
   const filter={song:'music_songs',artist:'music_artists',album:'music_albums'}[type];
   const d=await pipedFetch(`/search?q=${encodeURIComponent(q)}&filter=${filter}`);
-  return (d.items||[]).map(it=>mapPiped(it,type)).filter(Boolean);
+  const items=(d.items||[]).map(it=>mapPiped(it,type)).filter(Boolean);
+  return type==='song' ? refineSongs(items) : items;
 }
 function mapPiped(it,type){
   if(type==='song'){const id=vidId(it.url); if(!id)return null;
@@ -506,7 +522,7 @@ function mapPiped(it,type){
 }
 function streamToTrack(s){const id=vidId(s.url); if(!id)return null;
   return {id,title:cleanTitle(s.title),artist:s.uploaderName||'',thumb:s.thumbnail||''};}
-async function pipedArtistTracks(id){const d=await pipedFetch('/channel/'+id); return (d.relatedStreams||[]).map(streamToTrack).filter(Boolean);}
+async function pipedArtistTracks(id){const d=await pipedFetch('/channel/'+id); return refineSongs((d.relatedStreams||[]).map(streamToTrack).filter(Boolean));}
 async function pipedAlbumTracks(id){const d=await pipedFetch('/playlists/'+id); return (d.relatedStreams||[]).map(streamToTrack).filter(Boolean);}
 
 /* ============================================================
