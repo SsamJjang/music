@@ -343,9 +343,9 @@ const K = {keys:'freefy_yt_api_keys', keyMeta:'freefy_key_meta', legacy:'freefy_
            history:'freefy_history', searches:'freefy_searches'};
 const API = 'https://www.googleapis.com/youtube/v3';
 // Public Piped instances used ONLY as a fallback when every key is exhausted. Tried in order.
-const PIPED = ['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de',
-               'https://api.piped.private.coffee','https://pipedapi.leptons.xyz',
-               'https://piped-api.privacy.com.de'];
+const PIPED = ['https://api.piped.private.coffee','https://pipedapi.reallyaweso.me',
+               'https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de',
+               'https://pipedapi.darkness.services','https://pipedapi.leptons.xyz'];
 const CACHE_MAX = 500; // most-recent searches kept in persistent storage
 
 // Multiple API keys form a pool: used in order, each falls back to the next
@@ -498,15 +498,28 @@ async function dataSearch(q,type,force){
 async function dataEntityTracks(it,force){
   const ck='e|'+it.kind+'|'+it.id;
   if(!force){const c=cacheGet(ck); if(c) return c;}
-  const {items}=await ytOrPiped(
+  let {items}=await ytOrPiped(
     key => it.kind==='artist' ? ytChannelUploads(it.id,key) : ytPlaylistItems(it.id,key),
     ()  => it.kind==='artist' ? pipedArtistTracks(it.id)    : pipedAlbumTracks(it.id)
   );
+  // Official albums (OLAK5uy_) are already clean & correctly ordered — leave them.
+  // Unofficial user "album" playlists get junk removed (keep their order).
+  if(it.kind==='album' && !/^OLAK5uy_/.test(it.id)) items=items.filter(t=>!JUNK.test(t.title||''));
   cacheSet(ck,items);
   return items;
 }
 async function fetchSearch(q,type){
+  if(type==='album') return fetchAlbums(q);
   return ytOrPiped(key=>ytSearch(q,type,key), ()=>pipedSearch(q,type));
+}
+/* Albums: the Data API only returns messy user "Full Album" playlists. The real
+   official albums (OLAK5uy_, exact tracklist) live in YouTube Music, reachable
+   via Piped. So try Piped first; fall back to filtered user playlists. */
+async function fetchAlbums(q){
+  try{ const items=await pipedSearch(q,'album'); if(items&&items.length) return {items,source:'albums-official'}; }catch(e){}
+  const res=await withKeys(key=>ytSearch(q,'album',key));
+  if(res) return {items:res.map(a=>Object.assign({unofficial:true},a)), source:'albums-user'};
+  return {items:[], source:'albums-none'};
 }
 function isKeyErr(e){return e.message!=='QUOTA' && /api key|keyinvalid|not valid|forbidden|disabled|badrequest/i.test(e.message);}
 
@@ -637,7 +650,10 @@ function sourceBadge(source){
   const map={
     saved:'⚡ Instant — from your saved results (no API call)',
     youtube:'Source: YouTube',
-    piped:'🔁 Free backup source (quota not used)'
+    piped:'🔁 Free backup source (quota not used)',
+    'albums-official':'✓ Official albums — YouTube Music (exact tracklists)',
+    'albums-user':'⚠ Official albums unavailable right now — showing user playlists (junk filtered)',
+    'albums-none':'⚠ Could not load albums — try again'
   };
   return `<div class="source-badge">${map[source]||''}<span class="refresh" onclick="runSearch(true)" title="Fetch fresh results">↻ refresh</span></div>`;
 }
