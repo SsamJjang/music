@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Freefy — Free Music Player</title>
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='11' fill='%231db954'/%3E%3Cpath d='M8 15.5V8l7 3-7 4.5z' fill='%23000'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#000; --panel:#121212; --panel2:#181818; --panel-hover:#282828;
@@ -23,7 +24,7 @@
   #app{display:grid;grid-template-columns:260px 1fr;grid-template-rows:1fr 90px;height:100vh;gap:8px;padding:8px;background:var(--bg)}
   #sidebar{grid-row:1/2;display:flex;flex-direction:column;gap:8px;overflow:hidden}
   #main{grid-row:1/2;background:linear-gradient(180deg,#1f1f1f 0%,var(--panel) 260px);border-radius:8px;overflow-y:auto;position:relative}
-  #nowbar{grid-column:1/3;background:var(--bar);border-radius:8px;display:flex;align-items:center;padding:0 16px;gap:16px}
+  #nowbar{grid-column:1/3;background:var(--bar);border-radius:8px;display:flex;align-items:center;padding:0 16px;gap:16px;position:relative;z-index:41}
 
   /* Sidebar */
   .side-box{background:var(--panel);border-radius:8px;padding:8px 12px}
@@ -52,6 +53,9 @@
   .li-meta{min-width:0}
   .li-title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .li-sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .backup-btn{display:block;width:calc(100% - 16px);margin:0 8px;padding:9px;border-radius:6px;background:#232323;color:var(--muted);font-size:12px;font-weight:700;text-align:center}
+  .backup-btn:hover{color:#fff;background:#2e2e2e}
+  .backup-btn.on{color:var(--accent)}
   .lib-footer{display:flex;gap:8px;padding:8px}
   .lib-footer button{flex:1;font-size:12px;font-weight:600;color:var(--muted);padding:9px;border-radius:6px;background:#232323}
   .lib-footer button:hover{color:#fff;background:#2e2e2e}
@@ -175,7 +179,7 @@
   .now-btn.on{color:var(--accent)}
 
   /* fullscreen now playing + reactive lyrics */
-  #np-full{position:fixed;inset:0 0 90px 0;z-index:40;display:none;flex-direction:column;padding:14px 40px;overflow:hidden;color:#fff;
+  #np-full{position:fixed;inset:0;z-index:40;display:none;flex-direction:column;padding:14px 40px 106px;overflow:hidden;color:#fff;
     --fx1:#3a3a55;--fx2:#22323f;--fx3:#101018;--lsz:1;--lalign:left;background:#0a0a0a}
   .npf-bg{position:absolute;inset:0;z-index:0}
   #np-full.bg-ambient .npf-bg{background:
@@ -211,7 +215,7 @@
   #np-full.mode-zen .lyric-line{display:none;font-size:calc(40px*var(--lsz));text-align:center;line-height:1.3}
   #np-full.mode-zen .lyric-line.active{display:block;animation:zen .5s ease}
   @keyframes zen{from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:none}}
-  #np-full.mode-karaoke .lyric-line.active{background:linear-gradient(90deg,#fff var(--wipe,0%),rgba(255,255,255,.3) var(--wipe,0%));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  #np-full.mode-karaoke .lyric-line.active{background:linear-gradient(90deg,#fff calc(var(--wipe,0%) - 7%),rgba(255,255,255,.32) var(--wipe,0%));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   .npf-settings{position:absolute;top:52px;right:24px;z-index:5;width:272px;background:rgba(24,24,28,.94);backdrop-filter:blur(16px);border:1px solid #ffffff1f;border-radius:12px;padding:16px;display:none;box-shadow:0 20px 50px rgba(0,0,0,.5)}
   .npf-settings.open{display:block}
   .set-row{margin-bottom:14px}.set-row:last-child{margin-bottom:0}
@@ -249,7 +253,7 @@
     #nowbar{grid-column:1/2}
     .np-right{display:none}
     .np-left{width:auto}
-    #np-full{padding:14px 18px}
+    #np-full{padding:14px 18px 106px}
     .npf-inner{flex-direction:column;gap:18px;justify-content:flex-start}
     .npf-art{width:190px;height:190px}
     .npf-side{height:auto;flex:1;min-height:0}
@@ -282,6 +286,7 @@
         <button class="lib-add" title="Create playlist" onclick="createPlaylist()">+</button>
       </div>
       <div id="lib-list" class="lib-list"></div>
+      <button id="backup-btn" class="backup-btn" onclick="backupClick()" title="Keep a live JSON copy of your library on disk">💾 Auto-save to file: Off</button>
       <div class="lib-footer">
         <button onclick="exportLibrary()" title="Download your playlists & likes as a file">⬇ Export</button>
         <button onclick="importLibrary()" title="Restore from a file">⬆ Import</button>
@@ -431,8 +436,8 @@ function refineSongs(items){
   if(!f.length) f=items.slice();                          // never return an empty list
   return f.map((t,i)=>({t,s:trackScore(t),i})).sort((a,b)=>b.s-a.s||a.i-b.i).map(x=>x.t);
 }
-function persistLiked(){localStorage.setItem(K.liked,JSON.stringify(liked));}
-function persistPls(){localStorage.setItem(K.pls,JSON.stringify(playlists));}
+function persistLiked(){localStorage.setItem(K.liked,JSON.stringify(liked));scheduleBackup();}
+function persistPls(){localStorage.setItem(K.pls,JSON.stringify(playlists));scheduleBackup();}
 function persistCache(){
   try{localStorage.setItem(K.cache,JSON.stringify(cache));}
   catch(e){ // storage full: drop the oldest half and retry once
@@ -644,7 +649,7 @@ const GENRES=[
  {name:'Chill',q:'chill songs',c:'#0984e3'},{name:'Workout',q:'workout music',c:'#e17055'},
  {name:'Classical',q:'classical music',c:'#6c5ce7'},{name:'Party',q:'party hits',c:'#c0392b'}];
 function showHome(){
-  setActiveNav('home'); setActiveLib(null);
+  setActiveNav('home'); setActiveLib(null); viewTitle=''; updateTitle();
   const hr=new Date().getHours(); const greet=hr<5?'Good night':hr<12?'Good morning':hr<18?'Good afternoon':'Good evening';
   let html=`<div class="greeting">${greet}</div>`;
   if(searches.length) html+=`<div class="chips">${searches.slice(0,10).map(s=>`<span class="chip" data-chip="${esc(s)}">${esc(s)}</span>`).join('')}</div>`;
@@ -672,7 +677,7 @@ function recentCard(t){
 async function runSearch(force){
   const q=$('#search').value.trim();
   if(!q){showHome();return;}
-  lastQuery=q; pushSearch(q); setActiveNav('search'); setActiveLib(null); loading();
+  lastQuery=q; pushSearch(q); viewTitle='Search · '+q; updateTitle(); setActiveNav('search'); setActiveLib(null); loading();
   try{
     const {items,source}=await dataSearch(q,curType,force);
     renderResults(items,q,source);
@@ -760,6 +765,7 @@ function headerHTML(kind,title,sub,thumb,round){
       <div style="color:var(--muted)">${esc(sub)}</div></div></div>`;
 }
 function renderEntity(it,tracks){
+  viewTitle=it.title; updateTitle();
   content.innerHTML=headerHTML(it.kind,it.title,(it.sub?it.sub+' · ':'')+tracks.length+' tracks',it.thumb,it.kind==='artist');
   if(!tracks.length){content.innerHTML+=`<div class="side-empty">No playable tracks found here.</div>`;return;}
   const bar=el('div'); bar.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 18px';
@@ -794,7 +800,7 @@ function renderLibrary(){
   box.appendChild(libItem('liked','Liked Songs','Playlist · '+liked.length+' songs',`<div class="lib-cover heart">${HEART_SVG}</div>`,openLiked));
   // Most-recently-played playlists first
   playlists.slice().sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0)).forEach(p=>{
-    const cov=p.tracks[0]?`<div class="lib-cover"><img src="${esc(tImg(p.tracks[0]))}" onerror="this.style.opacity=0"></div>`
+    const cov=plCover(p)?`<div class="lib-cover"><img src="${esc(plCover(p))}" onerror="this.style.opacity=0"></div>`
                          :`<div class="lib-cover"><svg width="18" height="18" viewBox="0 0 24 24" fill="#888"><path d="M12 3v10.6A4 4 0 1014 17V7h4V3z"/></svg></div>`;
     box.appendChild(libItem(p.id,p.name,'Playlist · '+p.tracks.length+' songs',cov,()=>openPlaylist(p.id)));
   });
@@ -838,6 +844,24 @@ function movePlaylistTrack(id,i,dir){
   const p=playlists.find(x=>x.id===id); if(!p)return; const j=i+dir; if(j<0||j>=p.tracks.length)return;
   const t=p.tracks.splice(i,1)[0]; p.tracks.splice(j,0,t); persistPls(); openPlaylist(id);
 }
+/* pick an image file, cover-crop to a small square, return a compact data URL */
+function pickImageFile(cb){
+  const inp=el('input'); inp.type='file'; inp.accept='image/*';
+  inp.onchange=()=>{ const f=inp.files[0]; if(!f)return; const rd=new FileReader();
+    rd.onload=()=>{ const img=new Image(); img.onload=()=>{
+      const S=320,cv=el('canvas'); cv.width=cv.height=S; const c=cv.getContext('2d');
+      const sc=Math.max(S/img.width,S/img.height), w=img.width*sc, h=img.height*sc;
+      c.drawImage(img,(S-w)/2,(S-h)/2,w,h);
+      cb(cv.toDataURL('image/jpeg',0.85));
+    }; img.src=rd.result; };
+    rd.readAsDataURL(f); };
+  inp.click();
+}
+function changePlaylistCover(id){
+  const p=playlists.find(x=>x.id===id); if(!p)return;
+  pickImageFile(url=>{ p.cover=url; persistPls(); renderLibrary(); openPlaylist(id); toast('Cover updated'); });
+}
+function plCover(p){ return p.cover || (p.tracks[0]?tImg(p.tracks[0]):''); }
 function removeFromPlaylist(pid,trackId){
   const p=playlists.find(x=>x.id===pid); if(!p)return;
   p.tracks=p.tracks.filter(t=>t.id!==trackId); persistPls(); renderLibrary();
@@ -849,19 +873,20 @@ function deletePlaylist(pid){
 }
 function openPlaylist(id){
   const p=playlists.find(x=>x.id===id); if(!p)return;
-  setActiveNav(null); setActiveLib(id);
-  content.innerHTML=headerHTML('Playlist',p.name,p.tracks.length+' songs · saved on this device',p.tracks[0]?p.tracks[0].thumb:'',false);
+  setActiveNav(null); setActiveLib(id); viewTitle=p.name; updateTitle();
+  content.innerHTML=headerHTML('Playlist',p.name,p.tracks.length+' songs · saved on this device',plCover(p),false);
   const bar=el('div'); bar.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 18px';
   const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>{if(p.tracks.length){queue=p.tracks.slice();qIndex=0;setContext(id);playCurrent();}};
   const addQ=el('button','btn btn-ghost'); addQ.textContent='Add all to queue'; addQ.onclick=()=>queueAll(p.tracks);
+  const cov=el('button','btn btn-ghost'); cov.textContent='Change cover'; cov.onclick=()=>changePlaylistCover(id);
   const ren=el('button','btn btn-ghost'); ren.textContent='Rename'; ren.onclick=()=>renamePlaylist(id);
   const del=el('button','btn btn-danger'); del.textContent='Delete'; del.onclick=()=>deletePlaylist(id);
-  bar.append(play,addQ,ren,del); content.appendChild(bar);
+  bar.append(play,addQ,cov,ren,del); content.appendChild(bar);
   if(!p.tracks.length){content.innerHTML+=`<div class="side-empty">No songs yet. Search for music, then hit the ＋ on any track (or right-click → Add to playlist). Saved songs play with no API calls.</div>`;return;}
   const rows=el('div','rows'); p.tracks.forEach((t,i)=>rows.appendChild(trackRow(t,i,p.tracks,{removeFrom:id,reorder:true,context:id,onMove:(idx,dir)=>movePlaylistTrack(id,idx,dir)}))); content.appendChild(rows);
 }
 function openLiked(){
-  setActiveNav(null); setActiveLib('liked');
+  setActiveNav(null); setActiveLib('liked'); viewTitle='Liked Songs'; updateTitle();
   content.innerHTML=headerHTML('Playlist','Liked Songs',liked.length+' songs','',false);
   const bar=el('div'); bar.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 18px';
   const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>{if(liked.length){queue=liked.slice();qIndex=0;setContext('liked');playCurrent();}};
@@ -937,8 +962,7 @@ function goToArtist(t){
 
 /* export / import — the real "forever" backup */
 function exportLibrary(){
-  const data={app:'freefy',version:1,exportedAt:new Date().toISOString(),liked,playlists};
-  const a=el('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  const a=el('a'); a.href=URL.createObjectURL(new Blob([backupJSON()],{type:'application/json'}));
   a.download='freefy-library.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   toast('Library exported');
 }
@@ -949,10 +973,53 @@ function importLibrary(){
       if(!confirm('Import will replace your current playlists and likes. Continue?')) return;
       if(Array.isArray(d.playlists)){playlists=d.playlists;persistPls();}
       if(Array.isArray(d.liked)){liked=d.liked;persistLiked();}
+      if(Array.isArray(d.searches)){searches=d.searches;localStorage.setItem(K.searches,JSON.stringify(searches));}
+      if(Array.isArray(d.history)){history=d.history;localStorage.setItem(K.history,JSON.stringify(history));}
       renderLibrary(); showHome(); toast('Library imported');
     }catch(e){toast('That file isn\'t a valid Freefy backup');}};
     rd.readAsText(f);};
   inp.click();
+}
+
+/* ============================================================
+   PERMANENT AUTO-BACKUP — write the whole library to a real file on
+   disk (File System Access API) and re-save on every change. Also asks
+   the browser to make local storage persistent (won't be evicted).
+   ============================================================ */
+let backupHandle=null, pendingHandle=null, backupTimer=null;
+const fsaSupported = 'showSaveFilePicker' in window;
+function idbReq(fn){return new Promise((res,rej)=>{const r=indexedDB.open('freefy-db',1);
+  r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains('kv'))r.result.createObjectStore('kv');};
+  r.onerror=()=>rej(r.error); r.onsuccess=()=>{try{fn(r.result,res,rej);}catch(e){rej(e);}};});}
+function idbSet(k,v){return idbReq((db,res,rej)=>{const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put(v,k);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
+function idbGet(k){return idbReq((db,res,rej)=>{const tx=db.transaction('kv','readonly');const g=tx.objectStore('kv').get(k);g.onsuccess=()=>res(g.result);g.onerror=()=>rej(g.error);});}
+function backupJSON(){return JSON.stringify({app:'freefy',version:2,savedAt:new Date().toISOString(),playlists,liked,searches,history},null,2);}
+async function connectBackup(){
+  if(!fsaSupported){toast('This browser can’t auto-save to a file — use Export instead');return;}
+  try{
+    backupHandle=await window.showSaveFilePicker({suggestedName:'freefy-library.json',types:[{description:'Freefy library',accept:{'application/json':['.json']}}]});
+    pendingHandle=null; try{await idbSet('backupHandle',backupHandle);}catch(e){}
+    await writeBackupNow(); toast('Auto-save ON — your library now writes to that file'); updateBackupUI();
+  }catch(e){ if(e&&e.name!=='AbortError') toast('Couldn’t set up auto-save'); }
+}
+async function writeBackupNow(){ if(!backupHandle)return; try{ const w=await backupHandle.createWritable(); await w.write(backupJSON()); await w.close(); }catch(e){ pendingHandle=backupHandle; backupHandle=null; updateBackupUI(); } }
+function scheduleBackup(){ if(!backupHandle)return; clearTimeout(backupTimer); backupTimer=setTimeout(writeBackupNow,1200); }
+async function reconnectBackup(){
+  if(!pendingHandle) return connectBackup();
+  try{ const p=await pendingHandle.requestPermission({mode:'readwrite'});
+    if(p==='granted'){ backupHandle=pendingHandle; pendingHandle=null; await writeBackupNow(); toast('Auto-save reconnected ✓'); updateBackupUI(); } }catch(e){}
+}
+function backupClick(){ if(backupHandle){ writeBackupNow(); toast('Saved to file ✓'); } else if(pendingHandle){ reconnectBackup(); } else { connectBackup(); } }
+function updateBackupUI(){
+  const b=$('#backup-btn'); if(!b)return;
+  if(backupHandle){ b.textContent='💾 Auto-save: ON'; b.classList.add('on'); }
+  else if(pendingHandle){ b.textContent='🔌 Reconnect auto-save'; b.classList.remove('on'); }
+  else { b.textContent=fsaSupported?'💾 Auto-save to file: Off':'💾 Auto-save (use Export)'; b.classList.remove('on'); }
+}
+async function initBackup(){
+  try{ if(navigator.storage&&navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
+  if(fsaSupported){ try{ const h=await idbGet('backupHandle'); if(h){ const perm=await h.queryPermission({mode:'readwrite'}); if(perm==='granted') backupHandle=h; else pendingHandle=h; } }catch(e){} }
+  updateBackupUI();
 }
 
 /* small prompt modal */
@@ -1043,9 +1110,11 @@ audio.addEventListener('pause',()=>{if(engine==='audio'){isPlaying=false;setPlay
 audio.addEventListener('ended',()=>{if(engine==='audio')onTrackEnd();});
 
 function showThumb(on){const t=queue[qIndex],img=$('#np-thumb'); if(on&&t){img.src=tImg(t);img.style.display='block';}else{img.style.display='none';}}
+let viewTitle='';
+function updateTitle(){ const t=queue[qIndex]; document.title = t ? ('♪ '+t.title+(t.artist?' — '+t.artist:'')) : (viewTitle||'Freefy — Free Music Player'); }
 function updateNowPlaying(t){
   $('#np-title').textContent=t.title;$('#np-artist').textContent=t.artist||'';$('#np-like').classList.toggle('liked',liked.some(l=>l.id===t.id));
-  document.title='♪ '+t.title+(t.artist?' — '+t.artist:'');   // tab reacts to the song
+  updateTitle();                                              // tab reacts to the song
   extractColors(tImg(t),cols=>{setThemeColor(cols[0]);setFavicon(cols[0]);});
 }
 function refreshRowHighlight(){const cur=queue[qIndex];document.querySelectorAll('.row').forEach(r=>r.classList.toggle('playing',!!cur&&r.dataset.id===cur.id));}
@@ -1072,13 +1141,16 @@ function toggleRepeat(){repeat=(repeat+1)%3;const b=$('#btn-repeat');b.classList
     ?'<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="12" y="15.5" font-size="9" font-weight="800" text-anchor="middle" fill="currentColor">1</text></svg>'
     :'<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>';}
 
+let clockT=0, clockAt=0;
 function startTicker(){clearInterval(ticker);ticker=setInterval(()=>{
   if(seeking)return;
   const cur=eTime(),dur=eDur();
+  clockT=cur; clockAt=performance.now();     // reference point for smooth interpolation
   $('#cur-time').textContent=fmtTime(cur);$('#dur-time').textContent=fmtTime(dur);
   const pct=dur?(cur/dur*100):0;$('#seek-fill').style.width=pct+'%';$('#seek-knob').style.left=pct+'%';
   syncLyrics(cur);
-},500);}
+},250);}
+function estTime(){ return isPlaying ? clockT+(performance.now()-clockAt)/1000*playbackRate : clockT; }
 
 function wireBar(id,onSet){const bar=$('#'+id);const pct=e=>{const r=bar.getBoundingClientRect();return Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));};let drag=false;
   bar.addEventListener('mousedown',e=>{drag=true;seeking=true;onSet(pct(e),false);});
@@ -1123,7 +1195,7 @@ function nowMoreMenu(e){
    HISTORY + QUEUE
    ============================================================ */
 function pushHistory(t){ history=[trim(t),...history.filter(h=>h.id!==t.id)].slice(0,60); localStorage.setItem(K.history,JSON.stringify(history)); }
-function pushSearch(q){ q=(q||'').trim(); if(!q)return; searches=[q,...searches.filter(s=>s.toLowerCase()!==q.toLowerCase())].slice(0,12); localStorage.setItem(K.searches,JSON.stringify(searches)); }
+function pushSearch(q){ q=(q||'').trim(); if(!q)return; searches=[q,...searches.filter(s=>s.toLowerCase()!==q.toLowerCase())].slice(0,12); localStorage.setItem(K.searches,JSON.stringify(searches)); scheduleBackup(); }
 function addToQueue(t){ queue.push(trim(t)); if(qIndex<0){qIndex=0;setContext(null);playCurrent();} toast('Added to queue'); if(isQueueOpen())openQueue(); }
 function playNextInQueue(t){ if(qIndex<0){queue=[trim(t)];qIndex=0;setContext(null);playCurrent();} else {queue.splice(qIndex+1,0,trim(t));toast('Playing next');} if(isQueueOpen())openQueue(); }
 function moveQueue(i,dir){ const j=i+dir; if(j<0||j>=queue.length||j<=qIndex)return; const curId=queue[qIndex]&&queue[qIndex].id;
@@ -1188,15 +1260,23 @@ function syncLyrics(cur){
   const ov=$('#np-full'); if(!ov||ov.style.display==='none'||!lyrics||!lyrics.synced)return;
   const box=$('#npf-lyrics'); if(!box)return;
   let idx=-1; for(let i=0;i<lyrics.lines.length;i++){ if(lyrics.lines[i].t<=cur+0.12) idx=i; else break; }
-  if(lyricSettings.mode==='karaoke'&&idx>=0){                 // fill the active line as it's sung
-    const s=lyrics.lines[idx].t, e=(lyrics.lines[idx+1]?lyrics.lines[idx+1].t:s+3);
-    const w=Math.max(0,Math.min(1,(cur-s)/Math.max(.1,e-s)));
-    const a=box.querySelector('.lyric-line[data-i="'+idx+'"]'); if(a)a.style.setProperty('--wipe',(w*100)+'%');
-  }
   if(idx===lyricIdx)return; lyricIdx=idx;
   box.querySelectorAll('.lyric-line.active').forEach(l=>{l.classList.remove('active');l.style.removeProperty('--wipe');});
   const a=box.querySelector('.lyric-line[data-i="'+idx+'"]');
   if(a){a.classList.add('active'); if(lyricSettings.mode!=='zen') a.scrollIntoView({block:'center',behavior:'smooth'});}
+}
+/* per-frame karaoke fill — smooth, interpolated between the coarse player clock */
+let fxRAF=null;
+function fxLoop(){
+  const ov=$('#np-full');
+  if(!ov||ov.style.display==='none'){ fxRAF=null; return; }
+  if(lyricSettings.mode==='karaoke'&&lyrics&&lyrics.synced&&lyricIdx>=0){
+    const s=lyrics.lines[lyricIdx].t, e=(lyrics.lines[lyricIdx+1]?lyrics.lines[lyricIdx+1].t:s+3);
+    const w=Math.max(0,Math.min(1,(estTime()-s)/Math.max(.1,e-s)));
+    const box=$('#npf-lyrics'), a=box&&box.querySelector('.lyric-line[data-i="'+lyricIdx+'"]');
+    if(a) a.style.setProperty('--wipe',(w*100).toFixed(1)+'%');
+  }
+  fxRAF=requestAnimationFrame(fxLoop);
 }
 /* build the fullscreen shell once; content refreshes per track */
 function ensureFull(){
@@ -1224,7 +1304,7 @@ function ensureFull(){
   buildSettingsPanel();
   return ov;
 }
-function openFullNP(){ if(qIndex<0){toast('Nothing playing');return;} const ov=ensureFull(); ov.style.display='flex'; applyFxClasses(); buildFullNP(); }
+function openFullNP(){ if(qIndex<0){toast('Nothing playing');return;} const ov=ensureFull(); ov.style.display='flex'; applyFxClasses(); buildFullNP(); if(!fxRAF) fxLoop(); }
 function closeFullNP(){ const ov=$('#np-full'); if(ov)ov.style.display='none'; }
 function refreshFullNP(){ const ov=$('#np-full'); if(ov&&ov.style.display!=='none') buildFullNP(); }
 function applyFxClasses(){
@@ -1330,6 +1410,7 @@ document.addEventListener('keydown',e=>{
 (function(){const s=el('script');s.src='https://www.youtube.com/iframe_api';document.head.appendChild(s);})();
 
 renderLibrary();
+initBackup();
 if(!apiKeys.length) showKeyModal();
 showHome();
 </script>
