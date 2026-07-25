@@ -44,15 +44,23 @@ the same project share one 10,000/day budget. To actually add quota:
 
 ## Features
 
-- 🔍 Search **Songs**, **Artists**, and **Albums** (tabs)
-- ▶️ Full playback with play/pause, next/prev, seek, volume, shuffle & repeat
-- 📀 Open an artist for their top tracks, or an album/playlist for its track list
-- 📚 **Playlists** — create them, add any song with the `＋` button, play them.
-  Saved forever on this device; playing saved songs makes **zero API calls**.
+- 🔍 Search **Songs**, **Artists**, and **Albums**, filtered to *real songs*
+  (no reactions/covers/live/sped-up), ranked audio-first like YouTube Music
+- ▶️ Full playback: play/pause, next/prev, seek, volume/mute, shuffle & repeat
+- 🎤 **Synced lyrics** (from LRCLIB) — lines highlight in time and are
+  click-to-seek. Open the **full-screen Now Playing** view (click the track,
+  or press `L`) for big art + lyrics
+- 📻 **Queue** — add to queue, play next, reorder, remove, clear
+- 📀 Open an artist for top tracks, or an album/playlist for its track list;
+  **add a whole album/artist straight into a playlist or the queue** in one click
+- 📚 **Playlists** — create, rename, reorder tracks, delete. Add songs via the
+  `＋` button or right-click. Saved forever; playing them makes **zero API calls**
+- 🖱️ **Right-click** any song/album/artist for a full context menu
 - ❤️ **Liked Songs** — tap the ♥ on any track
-- 💾 **Export / Import** — download your whole library (playlists + likes) to a
-  file and restore it anywhere. This is your permanent backup.
-- ⌨️ Keyboard: `Space` play/pause, `Shift+→` / `Shift+←` next/prev
+- 🏠 **Home** — greeting, genre tiles, recent searches, recently played
+- ⏱️ **Sleep timer** and **playback speed** (0.75×–2×) in the ⋯ menu
+- 💾 **Export / Import** — download your whole library to a file and restore it
+- ⌨️ Keyboard: `Space` play/pause · `Shift+←/→` prev/next · `L` lyrics · `M` mute · `Esc` close
 - 📱 Responsive layout
 
 ## Never wastes API calls
