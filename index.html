@@ -194,8 +194,8 @@
   @keyframes flow{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
   .npf-scrim{position:absolute;inset:0;z-index:1;background:radial-gradient(130% 90% at 50% 0%,transparent,rgba(0,0,0,.4));pointer-events:none}
   .npf-top{position:relative;z-index:3;display:flex;justify-content:space-between;align-items:center}
-  .npf-close,.npf-gear{font-size:18px;color:rgba(255,255,255,.7);padding:6px 12px;border-radius:6px}
-  .npf-close:hover,.npf-gear:hover{color:#fff;background:#ffffff1f}
+  .npf-close,.npf-gear,.npf-editlyrics{font-size:18px;color:rgba(255,255,255,.7);padding:6px 12px;border-radius:6px}
+  .npf-close:hover,.npf-gear:hover,.npf-editlyrics:hover{color:#fff;background:#ffffff1f}
   .npf-inner{position:relative;z-index:2;flex:1;display:flex;gap:48px;min-height:0;align-items:center;justify-content:center}
   .npf-art{width:min(42vh,360px);height:min(42vh,360px);border-radius:14px;overflow:hidden;box-shadow:0 30px 70px rgba(0,0,0,.55);flex-shrink:0;background:#333}
   .npf-art img{width:100%;height:100%;object-fit:cover}
@@ -393,7 +393,8 @@
 
 const K = {keys:'freefy_yt_api_keys', keyMeta:'freefy_key_meta', legacy:'freefy_yt_api_key',
            liked:'freefy_liked', pls:'freefy_playlists', cache:'freefy_cache',
-           history:'freefy_history', searches:'freefy_searches', lyricfx:'freefy_lyricfx'};
+           history:'freefy_history', searches:'freefy_searches', lyricfx:'freefy_lyricfx',
+           shuffleMap:'freefy_shuffle_map', customLyrics:'freefy_custom_lyrics'};
 const API = 'https://www.googleapis.com/youtube/v3';
 // Public Piped instances, used for album search (always) and as a fallback for songs/artists
 // once every key is exhausted. Tried in order. Most public instances rot fast — checked against
@@ -412,6 +413,8 @@ let keyMeta   = load(K.keyMeta, {});   // { "<key>": {out:"YYYY-MM-DD", bad:true
 let liked     = load(K.liked, []);
 let playlists = load(K.pls, []);
 let cache     = load(K.cache, {});
+let shuffleMap = load(K.shuffleMap, {});     // { playlistId | 'liked': true/false } — per-playlist shuffle
+let customLyrics = load(K.customLyrics, {}); // { trackId: raw LRC/plain text }, overrides LRCLIB
 
 let queue=[], qIndex=-1, player=null, ytReady=false;
 let curType='song', lastQuery='', isPlaying=false, shuffle=false, repeat=0, seeking=false;
@@ -455,6 +458,8 @@ function refineSongs(items){
 function refineAlbums(items){ return items.filter(a=>/^OLAK5uy_/.test(a.id||'')); }
 function persistLiked(){localStorage.setItem(K.liked,JSON.stringify(liked));scheduleBackup();}
 function persistPls(){localStorage.setItem(K.pls,JSON.stringify(playlists));scheduleBackup();}
+function persistShuffleMap(){localStorage.setItem(K.shuffleMap,JSON.stringify(shuffleMap));}
+function persistCustomLyrics(){localStorage.setItem(K.customLyrics,JSON.stringify(customLyrics));scheduleBackup();}
 function persistCache(){
   try{localStorage.setItem(K.cache,JSON.stringify(cache));}
   catch(e){ // storage full: drop the oldest half and retry once
@@ -837,7 +842,18 @@ function setActiveLib(id){document.querySelectorAll('.lib-item').forEach(i=>i.cl
 function setContext(ctx){
   nowContext=ctx;
   if(ctx&&ctx!=='liked'){ const p=playlists.find(x=>x.id===ctx); if(p){p.lastPlayed=Date.now();persistPls();} }
+  shuffle = ctx ? !!shuffleMap[ctx] : false; // shuffle is a per-playlist attribute; ad-hoc queues are never shuffled
+  updateShuffleBtn();
   renderLibrary();
+}
+function updateShuffleBtn(){ const b=$('#btn-shuffle'); if(b) b.classList.toggle('on',shuffle); }
+/* start playing a saved list (playlist/liked), honoring that list's own saved shuffle state
+   for picking the first track — so turning shuffle on and hitting Play doesn't always start at 0 */
+function playListFrom(tracks,ctx){
+  if(!tracks||!tracks.length)return;
+  queue=tracks.slice(); setContext(ctx);
+  qIndex=(shuffle&&queue.length>1)?Math.floor(Math.random()*queue.length):0;
+  playCurrent();
 }
 function refreshEq(){
   document.querySelectorAll('.lib-item').forEach(it=>{
@@ -903,7 +919,7 @@ function openPlaylist(id){
   setActiveNav(null); setActiveLib(id); viewTitle=p.name; updateTitle();
   content.innerHTML=headerHTML('Playlist',p.name,p.tracks.length+' songs · saved on this device',plCover(p),false);
   const bar=el('div'); bar.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 18px';
-  const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>{if(p.tracks.length){queue=p.tracks.slice();qIndex=0;setContext(id);playCurrent();}};
+  const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>playListFrom(p.tracks,id);
   const addQ=el('button','btn btn-ghost'); addQ.textContent='Add all to queue'; addQ.onclick=()=>queueAll(p.tracks);
   const cov=el('button','btn btn-ghost'); cov.textContent='Change cover'; cov.onclick=()=>changePlaylistCover(id);
   const ren=el('button','btn btn-ghost'); ren.textContent='Rename'; ren.onclick=()=>renamePlaylist(id);
@@ -916,7 +932,7 @@ function openLiked(){
   setActiveNav(null); setActiveLib('liked'); viewTitle='Liked Songs'; updateTitle();
   content.innerHTML=headerHTML('Playlist','Liked Songs',liked.length+' songs','',false);
   const bar=el('div'); bar.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 18px';
-  const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>{if(liked.length){queue=liked.slice();qIndex=0;setContext('liked');playCurrent();}};
+  const play=el('button','btn btn-green'); play.textContent='▶  Play'; play.onclick=()=>playListFrom(liked,'liked');
   const addQ=el('button','btn btn-ghost'); addQ.textContent='Add all to queue'; addQ.onclick=()=>queueAll(liked);
   bar.append(play,addQ); content.appendChild(bar);
   if(!liked.length){content.innerHTML+=`<div class="side-empty">Tap the ♥ on any song to save it here.</div>`;return;}
@@ -1091,6 +1107,44 @@ function showPrompt(title,label,def,cb){
   inp.addEventListener('keydown',e=>{if(e.key==='Enter')go();});
 }
 
+/* ============================================================
+   CUSTOM LYRICS — paste/upload a .lrc (or plain text) per track,
+   overriding LRCLIB when a song isn't found there or is mismatched
+   ============================================================ */
+function showLyricsModal(){
+  const t=queue[qIndex]; if(!t){toast('Nothing playing');return;}
+  const existing=customLyrics[t.id]||'';
+  const bg=el('div','modal-bg'); bg.id='lyrics-modal';
+  bg.innerHTML=`<div class="modal" style="max-width:560px">
+    <h1 style="font-size:22px">Custom lyrics</h1>
+    <p style="opacity:.7;font-size:13px;margin:-6px 0 12px">For "${esc(t.title)}". Paste .lrc content (with [mm:ss.xx] tags for synced, scrolling lyrics) or plain text — this overrides LRCLIB for this track, saved on this device.</p>
+    <input type="file" id="lrc-file-input" accept=".lrc,.txt" style="margin-bottom:10px;color:#fff">
+    <textarea id="lrc-text" spellcheck="false" placeholder="[00:12.34]First line of lyrics..." style="width:100%;height:220px;padding:12px 14px;border-radius:8px;border:1px solid #444;background:#000;color:#fff;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;outline:none;resize:vertical">${esc(existing)}</textarea>
+    <div class="actions" style="margin-top:12px">
+      ${existing?'<button class="btn btn-ghost" id="lrc-clear">Remove custom lyrics</button>':''}
+      <button class="btn btn-ghost" id="lrc-cancel">Cancel</button>
+      <button class="btn btn-green" id="lrc-save">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+  bg.querySelector('#lrc-cancel').onclick=()=>bg.remove();
+  bg.querySelector('#lrc-file-input').onchange=async e=>{
+    const f=e.target.files[0]; if(!f)return;
+    bg.querySelector('#lrc-text').value=await f.text();
+  };
+  const clearBtn=bg.querySelector('#lrc-clear');
+  if(clearBtn) clearBtn.onclick=()=>{
+    delete customLyrics[t.id]; persistCustomLyrics(); bg.remove();
+    toast('Custom lyrics removed'); refreshFullNP();
+  };
+  bg.querySelector('#lrc-save').onclick=()=>{
+    const text=bg.querySelector('#lrc-text').value;
+    if(!text.trim()){toast('Paste some lyrics first');return;}
+    customLyrics[t.id]=text; persistCustomLyrics();
+    bg.remove(); toast('Custom lyrics saved'); refreshFullNP();
+  };
+}
+
 /* toast */
 let toastT;
 function toast(msg){let t=$('#toast'); if(!t){t=el('div','toast');t.id='toast';document.body.appendChild(t);} t.textContent=msg; clearTimeout(toastT); toastT=setTimeout(()=>t.remove(),1700);}
@@ -1190,7 +1244,11 @@ function playPrev(){if(!queue.length)return;
   if(eTime()>3){eSeek(0);return;}
   if(qIndex>0){qIndex--;playCurrent();}else eSeek(0);}
 function onTrackEnd(){if(repeat===2){eSeek(0);ePlayPause();return;}playNext();}
-function toggleShuffle(){shuffle=!shuffle;$('#btn-shuffle').classList.toggle('on',shuffle);}
+function toggleShuffle(){
+  shuffle=!shuffle;
+  if(nowContext){ shuffleMap[nowContext]=shuffle; persistShuffleMap(); }
+  updateShuffleBtn();
+}
 function toggleRepeat(){repeat=(repeat+1)%3;const b=$('#btn-repeat');b.classList.toggle('on',repeat>0);b.title=['Repeat','Repeat all','Repeat one'][repeat];
   b.innerHTML=repeat===2
     ?'<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="12" y="15.5" font-size="9" font-weight="800" text-anchor="middle" fill="currentColor">1</text></svg>'
@@ -1286,6 +1344,7 @@ function splitAT(t){
   return {artist:a,track:ti};
 }
 async function loadLyrics(t){
+  if(customLyrics[t.id]!=null){ lyrics=parseCustomLRC(customLyrics[t.id]); lyricIdx=-1; return lyrics; }
   const ck='ly|'+t.id;
   if(cache[ck]){ lyrics=cache[ck].items; lyricIdx=-1; return lyrics; }
   const {artist,track}=splitAT(t);
@@ -1298,6 +1357,8 @@ async function loadLyrics(t){
   }catch(e){ lyrics=null; }
   cache[ck]={items:lyrics,ts:Date.now()}; persistCache(); lyricIdx=-1; return lyrics;
 }
+/* user-supplied .lrc/plain text, saved per track id — takes priority over LRCLIB */
+function parseCustomLRC(text){ return /\[\d+:\d+/.test(text)?parseLRC({syncedLyrics:text}):parseLRC({plainLyrics:text}); }
 function parseLRC(item){
   if(item.syncedLyrics){
     const out=[];
@@ -1351,6 +1412,7 @@ function ensureFull(){
     <div class="npf-bg"></div><div class="npf-scrim"></div>
     <div class="npf-top">
       <button class="npf-close" title="Minimize (Esc)">▾  Close</button>
+      <button class="npf-editlyrics" title="Paste or upload custom lyrics for this track">✎  Lyrics</button>
       <button class="npf-gear" title="Lyrics &amp; visual settings">⚙  Style</button>
     </div>
     <div class="npf-inner">
@@ -1364,6 +1426,7 @@ function ensureFull(){
     <div class="npf-settings" id="npf-settings"></div>`;
   document.body.appendChild(ov);
   ov.querySelector('.npf-close').onclick=closeFullNP;
+  ov.querySelector('.npf-editlyrics').onclick=showLyricsModal;
   ov.querySelector('.npf-gear').onclick=()=>$('#npf-settings').classList.toggle('open');
   $('#npf-artist').onclick=()=>{if(queue[qIndex]){goToArtist(queue[qIndex]);closeFullNP();}};
   buildSettingsPanel();
@@ -1389,7 +1452,11 @@ async function renderLyrics(){
   box.innerHTML='<div class="side-empty" style="color:rgba(255,255,255,.6)">Loading lyrics…</div>';
   await loadLyrics(t);
   const box2=$('#npf-lyrics'); if(!box2)return;
-  if(!lyrics||!lyrics.lines.length){ box2.innerHTML='<div class="side-empty" style="color:rgba(255,255,255,.6)">No lyrics found (via LRCLIB — not every song is there).</div>'; return; }
+  if(!lyrics||!lyrics.lines.length){
+    box2.innerHTML=`<div class="side-empty" style="color:rgba(255,255,255,.6)">No lyrics found (via LRCLIB — not every song is there).<br>
+      <button class="btn btn-ghost" style="margin-top:10px" onclick="showLyricsModal()">Add custom lyrics</button></div>`;
+    return;
+  }
   box2.innerHTML=lyrics.lines.map((l,i)=>{
     // wrap each word in a span so karaoke can light them one at a time (and follow wraps)
     const words=(l.txt||'♪').split(/(\s+)/).map(w=>w.trim()===''?w:`<span class="kw">${esc(w)}</span>`).join('');
