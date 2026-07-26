@@ -316,6 +316,7 @@
         <button class="tab" data-type="album">Albums</button>
       </div>
       <button class="tab" id="btn-keys" title="Manage API keys" onclick="showKeyModal()" style="margin-left:auto">Keys</button>
+      <button class="tab" id="btn-spotify-keys" title="Set up Spotify credentials (for lyrics)" onclick="showSpotifyModal()">Lyrics</button>
     </div>
     <div class="content" id="content"></div>
   </main>
@@ -392,7 +393,8 @@
 
 const K = {keys:'freefy_yt_api_keys', keyMeta:'freefy_key_meta', legacy:'freefy_yt_api_key',
            liked:'freefy_liked', pls:'freefy_playlists', cache:'freefy_cache',
-           history:'freefy_history', searches:'freefy_searches', lyricfx:'freefy_lyricfx'};
+           history:'freefy_history', searches:'freefy_searches', lyricfx:'freefy_lyricfx',
+           spotify:'freefy_spotify_creds'};
 const API = 'https://www.googleapis.com/youtube/v3';
 // Public Piped instances used ONLY as a fallback when every key is exhausted. Tried in order.
 const PIPED = ['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de',
@@ -417,6 +419,8 @@ let lyrics=null, lyricIdx=-1;         // parsed lyrics of current track
 let volume=100, muted=false, prevVol=100, playbackRate=1, sleepHandle=null;
 let nowContext=null;   // which library item ('liked' | playlistId | null) is playing
 let lyricSettings=load(K.lyricfx,{mode:'scroll',bg:'ambient',align:'left',size:1,glow:true});
+let spotifyCreds=load(K.spotify,{id:'',secret:''}); // Spotify client-credentials, used only to look up lyrics via Lyricstify
+let spotifyToken=null; // {token, exp} cached in memory, refreshed on expiry
 
 /* ---------- helpers ---------- */
 const $  = s => document.querySelector(s);
@@ -539,6 +543,70 @@ function saveKeys(){
 }
 
 /* ============================================================
+   SPOTIFY CREDENTIALS (client-credentials grant, used only to look
+   up a track's Spotify ID so Lyricstify can find its lyrics)
+   ============================================================ */
+function showSpotifyModal(){
+  const bg = el('div','modal-bg'); bg.id='spotify-modal';
+  bg.innerHTML = `
+    <div class="modal">
+      <h1>🎤 Lyrics (via Lyricstify)</h1>
+      <p>Freefy gets time-synced lyrics from <b>Lyricstify</b>, which looks lyrics up by Spotify track ID.
+         To resolve a song to that ID, Freefy needs a <b>free</b> Spotify app's Client ID and Secret
+         (client-credentials only — no login, no access to your Spotify account). Saved only in this browser.</p>
+      <ol>
+        <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify Developer Dashboard</a> and log in.</li>
+        <li><b>Create app</b> — any name/description; for the redirect URI just put <code>http://localhost</code> (unused by this flow).</li>
+        <li>Open the app → <b>Settings</b> to see its <b>Client ID</b> and <b>Client Secret</b>.</li>
+        <li>Paste both below.</li>
+      </ol>
+      <div class="modal-err" id="spotify-err"></div>
+      <input id="spotify-id-input" spellcheck="false" placeholder="Client ID" value="${esc(spotifyCreds.id)}"
+        style="width:100%;padding:12px 14px;border-radius:8px;border:1px solid #444;background:#000;color:#fff;font:13px/1.6 ui-monospace,Menlo,Consolas,monospace;outline:none;margin-bottom:10px">
+      <input id="spotify-secret-input" type="password" spellcheck="false" placeholder="Client Secret" value="${esc(spotifyCreds.secret)}"
+        style="width:100%;padding:12px 14px;border-radius:8px;border:1px solid #444;background:#000;color:#fff;font:13px/1.6 ui-monospace,Menlo,Consolas,monospace;outline:none;margin-bottom:14px">
+      <div class="actions">
+        <button class="btn btn-ghost" onclick="document.getElementById('spotify-modal').remove()">Skip / Close</button>
+        <button class="btn btn-green" onclick="saveSpotifyCreds()">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  setTimeout(()=>$('#spotify-id-input').focus(),50);
+}
+function saveSpotifyCreds(){
+  const id=$('#spotify-id-input').value.trim(), secret=$('#spotify-secret-input').value.trim();
+  spotifyCreds={id,secret}; localStorage.setItem(K.spotify,JSON.stringify(spotifyCreds));
+  spotifyToken=null; // force a fresh token under the new credentials
+  $('#spotify-modal').remove();
+  if(id&&secret) toast('Spotify credentials saved');
+}
+/* Client-credentials grant: app-only token, no user login. Cached until it expires. */
+async function spotifyToken_get(){
+  if(spotifyToken&&spotifyToken.exp>Date.now()+5000) return spotifyToken.token;
+  if(!spotifyCreds.id||!spotifyCreds.secret) return null;
+  const r=await fetch('https://accounts.spotify.com/api/token',{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded',
+             'Authorization':'Basic '+btoa(spotifyCreds.id+':'+spotifyCreds.secret)},
+    body:'grant_type=client_credentials'
+  });
+  if(!r.ok) return null;
+  const d=await r.json();
+  spotifyToken={token:d.access_token, exp:Date.now()+(d.expires_in||3600)*1000};
+  return spotifyToken.token;
+}
+async function spotifyFindTrackId(artist,track){
+  const token=await spotifyToken_get(); if(!token) return null;
+  const q=((artist?'artist:'+artist+' ':'')+'track:'+track).trim();
+  const p=new URLSearchParams({q,type:'track',limit:'1'});
+  const r=await fetch('https://api.spotify.com/v1/search?'+p,{headers:{'Authorization':'Bearer '+token}});
+  if(!r.ok) return null;
+  const d=await r.json();
+  const item=d.tracks&&d.tracks.items&&d.tracks.items[0];
+  return item?item.id:null;
+}
+
+/* ============================================================
    DATA LAYER — persistent cache → YouTube → Piped fallback
    Track object: {id, title, artist, thumb}
    Entity: {kind:'song'|'artist'|'album', id, title, sub, thumb}
@@ -569,6 +637,12 @@ async function dataEntityTracks(it,force){
   return items;
 }
 async function fetchSearch(q,type){
+  /* Official YT-Music album playlists (id prefix "OLAK5uy_") are never surfaced by
+     the regular YouTube Data API's playlist search, no matter the query or result
+     count — confirmed empirically, they simply aren't in that index. Piped queries
+     YouTube Music's own search instead, which does return them. So albums always
+     go through Piped; API keys are only useful for song/artist search. */
+  if(type==='album') return {items:await pipedSearch(q,type), source:'piped'};
   return ytOrPiped(key=>ytSearch(q,type,key), ()=>pipedSearch(q,type));
 }
 function isKeyErr(e){return e.message!=='QUOTA' && /api key|keyinvalid|not valid|forbidden|disabled|badrequest/i.test(e.message);}
@@ -1238,8 +1312,9 @@ function openQueue(){
 }
 
 /* ============================================================
-   LYRICS (LRCLIB — free, synced) + FULL SCREEN NOW PLAYING
+   LYRICS (Lyricstify — time-synced Spotify lyrics) + FULL SCREEN NOW PLAYING
    ============================================================ */
+const LYRICSTIFY_API='https://api.lyricstify.vercel.app';
 function splitAT(t){
   let a=(t.artist||'').replace(/\s*-\s*topic$/i,'').replace(/vevo$/i,'').replace(/\s*-\s*official.*$/i,'').replace(/\bofficial\b/i,'').trim();
   let ti=cleanTitle(t.title||'');
@@ -1252,26 +1327,23 @@ async function loadLyrics(t){
   if(cache[ck]){ lyrics=cache[ck].items; lyricIdx=-1; return lyrics; }
   const {artist,track}=splitAT(t);
   try{
-    const r=await fetch('https://lrclib.net/api/search?q='+encodeURIComponent(((artist?artist+' ':'')+track).trim()));
-    const arr=await r.json();
-    const withSync=Array.isArray(arr)?arr.filter(x=>x.syncedLyrics):[];
-    const pool=withSync.length?withSync:(Array.isArray(arr)?arr.filter(x=>x.plainLyrics):[]);
-    lyrics=pool.length?parseLRC(pool[0]):null;
+    const trackId=await spotifyFindTrackId(artist,track);
+    if(!trackId){ lyrics=null; }
+    else{
+      const r=await fetch(`${LYRICSTIFY_API}/v1/lyrics/${trackId}`);
+      if(!r.ok) throw new Error('not found');
+      const d=await r.json();
+      lyrics=parseLyricstify(d.lyrics);
+    }
   }catch(e){ lyrics=null; }
   cache[ck]={items:lyrics,ts:Date.now()}; persistCache(); lyricIdx=-1; return lyrics;
 }
-function parseLRC(item){
-  if(item.syncedLyrics){
-    const out=[];
-    item.syncedLyrics.split('\n').forEach(line=>{
-      const tags=line.match(/\[(\d+):(\d+(?:\.\d+)?)\]/g); if(!tags)return;
-      const txt=line.replace(/\[[^\]]*\]/g,'').trim();
-      tags.forEach(tag=>{const mm=tag.match(/\[(\d+):(\d+(?:\.\d+)?)\]/);out.push({t:parseInt(mm[1])*60+parseFloat(mm[2]),txt});});
-    });
-    out.sort((a,b)=>a.t-b.t);
-    return {synced:true,lines:out};
+function parseLyricstify(l){
+  if(!l||!Array.isArray(l.lines)||!l.lines.length) return null;
+  if(l.syncType==='LINE_SYNCED'){
+    return {synced:true,lines:l.lines.map(x=>({t:x.startTimeMs/1000,txt:x.words}))};
   }
-  return {synced:false,lines:(item.plainLyrics||'').split('\n').map(txt=>({t:null,txt}))};
+  return {synced:false,lines:l.lines.map(x=>({t:null,txt:x.words}))};
 }
 function syncLyrics(cur){
   const ov=$('#np-full'); if(!ov||ov.style.display==='none'||!lyrics||!lyrics.synced)return;
@@ -1351,7 +1423,10 @@ async function renderLyrics(){
   box.innerHTML='<div class="side-empty" style="color:rgba(255,255,255,.6)">Loading lyrics…</div>';
   await loadLyrics(t);
   const box2=$('#npf-lyrics'); if(!box2)return;
-  if(!lyrics||!lyrics.lines.length){ box2.innerHTML='<div class="side-empty" style="color:rgba(255,255,255,.6)">No lyrics found (via LRCLIB — not every song is there).</div>'; return; }
+  if(!lyrics||!lyrics.lines.length){
+    const hint = (spotifyCreds.id&&spotifyCreds.secret) ? 'not every song is on Spotify/Lyricstify' : 'set up Spotify credentials via the "Lyrics" button to enable this';
+    box2.innerHTML=`<div class="side-empty" style="color:rgba(255,255,255,.6)">No lyrics found (via Lyricstify — ${hint}).</div>`; return;
+  }
   box2.innerHTML=lyrics.lines.map((l,i)=>{
     // wrap each word in a span so karaoke can light them one at a time (and follow wraps)
     const words=(l.txt||'♪').split(/(\s+)/).map(w=>w.trim()===''?w:`<span class="kw">${esc(w)}</span>`).join('');
