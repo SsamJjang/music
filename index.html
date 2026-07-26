@@ -1019,6 +1019,7 @@ function importLibrary(){
       if(Array.isArray(d.searches)){searches=d.searches;localStorage.setItem(K.searches,JSON.stringify(searches));}
       if(Array.isArray(d.history)){history=d.history;localStorage.setItem(K.history,JSON.stringify(history));}
       if(d.shuffleMap&&typeof d.shuffleMap==='object'){shuffleMap=d.shuffleMap;persistShuffleMap();}
+      if(d.customLyrics&&typeof d.customLyrics==='object'){customLyrics=d.customLyrics;persistCustomLyrics();}
       renderLibrary(); showHome(); toast('Library imported');
     }catch(e){toast('That file isn\'t a valid Freefy backup');}};
     rd.readAsText(f);};
@@ -1037,7 +1038,7 @@ function idbReq(fn){return new Promise((res,rej)=>{const r=indexedDB.open('freef
   r.onerror=()=>rej(r.error); r.onsuccess=()=>{try{fn(r.result,res,rej);}catch(e){rej(e);}};});}
 function idbSet(k,v){return idbReq((db,res,rej)=>{const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put(v,k);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
 function idbGet(k){return idbReq((db,res,rej)=>{const tx=db.transaction('kv','readonly');const g=tx.objectStore('kv').get(k);g.onsuccess=()=>res(g.result);g.onerror=()=>rej(g.error);});}
-function backupJSON(){return JSON.stringify({app:'freefy',version:2,savedAt:new Date().toISOString(),playlists,liked,searches,history,shuffleMap},null,2);}
+function backupJSON(){return JSON.stringify({app:'freefy',version:2,savedAt:new Date().toISOString(),playlists,liked,searches,history,shuffleMap,customLyrics},null,2);}
 async function connectBackup(){
   if(!fsaSupported){toast('This browser can’t auto-save to a file — use Export instead');return;}
   try{
@@ -1076,6 +1077,7 @@ async function openExistingBackup(){
       if(Array.isArray(d.searches)){searches=d.searches;localStorage.setItem(K.searches,JSON.stringify(searches));}
       if(Array.isArray(d.history)){history=d.history;localStorage.setItem(K.history,JSON.stringify(history));}
       if(d.shuffleMap&&typeof d.shuffleMap==='object'){shuffleMap=d.shuffleMap;persistShuffleMap();}
+      if(d.customLyrics&&typeof d.customLyrics==='object'){customLyrics=d.customLyrics;persistCustomLyrics();}
       renderLibrary();
     }
   }catch(e){ toast('That file isn\'t a valid Freefy backup — connecting anyway'); }
