@@ -296,6 +296,7 @@
       </div>
       <div id="lib-list" class="lib-list"></div>
       <button id="backup-btn" class="backup-btn" onclick="backupClick()" title="Keep a live JSON copy of your library on disk">💾 Auto-save to file: Off</button>
+      <button id="backup-open-btn" class="backup-btn" style="margin-top:4px;font-size:11px" onclick="openExistingBackup()" title="Already have a Freefy backup file? Point auto-save at it instead of starting a new one">📂 Use existing file…</button>
       <div class="lib-footer">
         <button onclick="exportLibrary()" title="Download your playlists & likes as a file">⬇ Export</button>
         <button onclick="importLibrary()" title="Restore from a file">⬆ Import</button>
@@ -1104,11 +1105,39 @@ async function reconnectBackup(){
     if(p==='granted'){ backupHandle=pendingHandle; pendingHandle=null; await writeBackupNow(); toast('Auto-save reconnected ✓'); updateBackupUI(); } }catch(e){}
 }
 function backupClick(){ if(backupHandle){ writeBackupNow(); toast('Saved to file ✓'); } else if(pendingHandle){ reconnectBackup(); } else { connectBackup(); } }
+/* Point auto-save at a file the user already has (e.g. from a previous session
+   whose remembered file handle lost permission, or a backup made on another
+   device) instead of forcing them through "Save As" and risking a brand-new
+   file every time. Loads that file's library in first, so it becomes the
+   thing being kept in sync rather than getting silently overwritten. */
+async function openExistingBackup(){
+  if(!fsaSupported){toast('This browser can’t auto-save to a file — use Export instead');return;}
+  let h;
+  try{ [h]=await window.showOpenFilePicker({types:[{description:'Freefy library',accept:{'application/json':['.json']}}]}); }
+  catch(e){ if(e&&e.name!=='AbortError') toast('Couldn’t open that file'); return; }
+  try{
+    const perm=await h.requestPermission({mode:'readwrite'});
+    if(perm!=='granted'){ toast('Permission needed to auto-save to that file'); return; }
+  }catch(e){ return; }
+  try{
+    const text=await (await h.getFile()).text(); const d=JSON.parse(text);
+    if(d&&(Array.isArray(d.playlists)||Array.isArray(d.liked))&&confirm('Load the library saved in this file into Freefy? (Replaces what\'s currently loaded)')){
+      if(Array.isArray(d.playlists)){playlists=d.playlists;persistPls();}
+      if(Array.isArray(d.liked)){liked=d.liked;persistLiked();}
+      if(Array.isArray(d.searches)){searches=d.searches;localStorage.setItem(K.searches,JSON.stringify(searches));}
+      if(Array.isArray(d.history)){history=d.history;localStorage.setItem(K.history,JSON.stringify(history));}
+      renderLibrary();
+    }
+  }catch(e){ toast('That file isn\'t a valid Freefy backup — connecting anyway'); }
+  backupHandle=h; pendingHandle=null; try{await idbSet('backupHandle',backupHandle);}catch(e){}
+  await writeBackupNow(); toast('Auto-save ON — using that file'); updateBackupUI();
+}
 function updateBackupUI(){
-  const b=$('#backup-btn'); if(!b)return;
+  const b=$('#backup-btn'), o=$('#backup-open-btn'); if(!b)return;
   if(backupHandle){ b.textContent='💾 Auto-save: ON'; b.classList.add('on'); }
   else if(pendingHandle){ b.textContent='🔌 Reconnect auto-save'; b.classList.remove('on'); }
   else { b.textContent=fsaSupported?'💾 Auto-save to file: Off':'💾 Auto-save (use Export)'; b.classList.remove('on'); }
+  if(o) o.style.display=(fsaSupported&&!backupHandle)?'':'none';
 }
 async function initBackup(){
   try{ if(navigator.storage&&navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
