@@ -396,10 +396,13 @@ const K = {keys:'freefy_yt_api_keys', keyMeta:'freefy_key_meta', legacy:'freefy_
            history:'freefy_history', searches:'freefy_searches', lyricfx:'freefy_lyricfx',
            spotify:'freefy_spotify_creds'};
 const API = 'https://www.googleapis.com/youtube/v3';
-// Public Piped instances used ONLY as a fallback when every key is exhausted. Tried in order.
-const PIPED = ['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de',
-               'https://api.piped.private.coffee','https://pipedapi.leptons.xyz',
-               'https://piped-api.privacy.com.de'];
+// Public Piped instances, used for album search (always) and as a fallback for songs/artists
+// once every key is exhausted. Tried in order. Most public instances rot fast — checked against
+// the live registry at https://piped-instances.kavin.rocks, which currently lists exactly one
+// healthy, CORS-enabled instance; the others here previously (kavin.rocks, adminforge.de,
+// leptons.xyz, privacy.com.de) were all down (502s / broken redirects), which is why album
+// search felt random — most requests were burning through 4 dead hosts before reaching this one.
+const PIPED = ['https://api.piped.private.coffee'];
 const CACHE_MAX = 500; // most-recent searches kept in persistent storage
 
 // Multiple API keys form a pool: used in order, each falls back to the next
