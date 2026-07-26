@@ -219,10 +219,12 @@
   @keyframes zen{from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:none}}
   /* Karaoke: fill word-by-word so the highlight follows the natural wrap
      (finishes line 1, then moves to line 2) instead of a single horizontal
-     wipe smeared across every wrapped row at once. */
-  #np-full.mode-karaoke .lyric-line.active .kw{color:rgba(255,255,255,.34);transition:color .1s linear}
-  #np-full.mode-karaoke .lyric-line.active .kw.lit{color:#fff}
-  #np-full.mode-karaoke .lyric-line.active .kw.cur{
+     wipe smeared across every wrapped row at once.
+     Every word — lit, current, or upcoming — uses the same gradient-clip
+     render path (only --wf differs). Previously "lit"/"cur" swapped between
+     a plain `color` and a background-clip:text gradient, and that render-mode
+     switch can't be transitioned, so each word boundary popped/flashed. */
+  #np-full.mode-karaoke .lyric-line.active .kw{
     background:linear-gradient(90deg,#fff var(--wf,0%),rgba(255,255,255,.34) var(--wf,0%));
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
   .npf-settings{position:absolute;top:52px;right:24px;z-index:5;width:272px;background:rgba(24,24,28,.94);backdrop-filter:blur(16px);border:1px solid #ffffff1f;border-radius:12px;padding:16px;display:none;box-shadow:0 20px 50px rgba(0,0,0,.5)}
@@ -1389,7 +1391,7 @@ function syncLyrics(cur){
   if(idx===lyricIdx)return; lyricIdx=idx;
   box.querySelectorAll('.lyric-line.active').forEach(l=>{
     l.classList.remove('active'); l.style.removeProperty('--wipe');
-    l.querySelectorAll('.kw').forEach(w=>{w.classList.remove('lit','cur');w.style.removeProperty('--wf');});
+    l.querySelectorAll('.kw').forEach(w=>{w.style.removeProperty('--wf');});
   });
   const a=box.querySelector('.lyric-line[data-i="'+idx+'"]');
   if(a){a.classList.add('active'); if(lyricSettings.mode!=='zen') a.scrollIntoView({block:'center',behavior:'smooth'});}
@@ -1406,9 +1408,8 @@ function fxLoop(){
     if(a){
       const words=a.querySelectorAll('.kw'), pos=prog*words.length, done=Math.floor(pos);
       words.forEach((ws,wi)=>{
-        if(wi<done){ ws.classList.add('lit'); ws.classList.remove('cur'); ws.style.removeProperty('--wf'); }
-        else if(wi===done){ ws.classList.remove('lit'); ws.classList.add('cur'); ws.style.setProperty('--wf',((pos-done)*100).toFixed(1)+'%'); }
-        else { ws.classList.remove('lit','cur'); ws.style.removeProperty('--wf'); }
+        const wf=wi<done?100:(wi===done?(pos-done)*100:0);
+        ws.style.setProperty('--wf',wf.toFixed(1)+'%');
       });
     }
   }
