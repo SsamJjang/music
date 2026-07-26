@@ -1258,7 +1258,13 @@ let clockT=0, clockAt=0;
 function startTicker(){clearInterval(ticker);ticker=setInterval(()=>{
   if(seeking)return;
   const cur=eTime(),dur=eDur();
-  clockT=cur; clockAt=performance.now();     // reference point for smooth interpolation
+  // the player clock (esp. YouTube) is coarse and can jitter slightly behind
+  // where our own interpolation already got to; snapping straight to it every
+  // tick makes karaoke words flash backward. Ignore small backward jitter,
+  // only resync on a real jump (seek/track change).
+  const prevEst=estTime();
+  clockT=(cur<prevEst&&(prevEst-cur)<0.5)?prevEst:cur;
+  clockAt=performance.now();     // reference point for smooth interpolation
   $('#cur-time').textContent=fmtTime(cur);$('#dur-time').textContent=fmtTime(dur);
   const pct=dur?(cur/dur*100):0;$('#seek-fill').style.width=pct+'%';$('#seek-knob').style.left=pct+'%';
   syncLyrics(cur);
