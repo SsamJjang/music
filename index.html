@@ -639,9 +639,9 @@ async function apiError(res){
 
 /* ---------- Piped (keyless fallback) ---------- */
 function fetchT(url,ms){return Promise.race([fetch(url),new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),ms))]);}
-async function pipedFetch(path){
+async function pipedFetch(path,ms){
   for(const base of PIPED){
-    try{const r=await fetchT(base+path,7000); if(r.ok) return await r.json();}catch(e){}
+    try{const r=await fetchT(base+path,ms||7000); if(r.ok) return await r.json();}catch(e){}
   }
   throw new Error('The free backup servers are all unreachable right now. Add a YouTube API key for reliable results, or try again later.');
 }
@@ -1186,7 +1186,7 @@ function armWatchdog(){
     try{ now=player.getCurrentTime(); st=player.getPlayerState(); }catch(e){}
     if(now!==last||st===YT.PlayerState.PLAYING||st===YT.PlayerState.BUFFERING) idle=0; else idle++;
     last=now;
-    if(idle>=10){ stopWatchdog(); fallbackToAudio(); }   // 10s of nothing at all
+    if(idle>=5){ stopWatchdog(); fallbackToAudio(); }   // 5s frozen solid = really dead
   },1000);
 }
 
@@ -1237,8 +1237,17 @@ async function toAudio(){
     setTimeout(()=>playNext(),700);
   }
 }
+/* The public Piped network is largely dead and YouTube bot-blocks what's left, so
+   every stream lookup is usually a guaranteed stall. Give it a short leash and stop
+   asking entirely after three straight misses — otherwise each skip pays the full
+   timeout for a fallback that isn't going to answer. */
+let pipedStreamMisses=0;
 async function pipedStreamUrl(id){
-  const d=await pipedFetch('/streams/'+id);
+  if(pipedStreamMisses>=3) throw new Error('backup stream servers are down');
+  let d;
+  try{ d=await pipedFetch('/streams/'+id,3500); }
+  catch(e){ pipedStreamMisses++; throw e; }
+  pipedStreamMisses=0;
   const a=(d.audioStreams||[]).slice().sort((x,y)=>(y.bitrate||0)-(x.bitrate||0));
   const pick=a.find(s=>/mp4|m4a|aac/i.test((s.mimeType||'')+(s.codec||'')))||a[0];
   return pick&&pick.url;
