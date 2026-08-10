@@ -326,7 +326,7 @@
   <!-- Now Playing -->
   <footer id="nowbar">
     <div class="np-left">
-      <div id="yt-holder" title="Full screen" onclick="openFullNP()" style="cursor:pointer"><div id="yt-player"></div><img id="np-thumb" alt=""></div>
+      <div id="yt-holder" title="Full screen" onclick="openFullNP()" style="cursor:pointer"><div id="yt-player"></div><div id="yt-player-2" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px"></div><img id="np-thumb" alt=""></div>
       <div class="np-info" title="Full screen" onclick="openFullNP()" style="cursor:pointer">
         <div class="np-title" id="np-title">—</div>
         <div class="np-artist" id="np-artist">Nothing playing</div>
@@ -1190,16 +1190,67 @@ function armWatchdog(){
   },1000);
 }
 
-function onYouTubeIframeAPIReady(){
-  player=new YT.Player('yt-player',{
+/* ---------- two players: one audible, one warming up the next track ----------
+   A fresh loadVideoById stalls ~5s before audio starts (YouTube's ad-check path
+   hangs when a blocker is active), but an auto-advance after a track ENDS doesn't.
+   So the visible delay isn't work we can make faster — it's a wait we can move.
+   A second hidden player loads the next track while the current one is still
+   playing, eats the stall in the background, then parks paused at 0. Pressing
+   Next just swaps which instance is audible. */
+let players=[], active=0, preloadId=null, preloadReady=false, preloadT=null;
+function standby(){ return players[1-active]; }
+function mkPlayer(divId){
+  return new YT.Player(divId,{
     height:'66',width:'66',host:'https://www.youtube.com',
     playerVars:{controls:0,disablekb:1,modestbranding:1,playsinline:1,rel:0},
-    events:{onReady:()=>{ytReady=true;try{player.setVolume(volume);}catch(e){}},onStateChange:onPlayerState,onError:onPlayerErr}
+    events:{
+      onReady:()=>{ytReady=true;try{player.setVolume(volume);}catch(e){}},
+      onStateChange:e=>{ (e.target===player) ? onPlayerState(e) : onStandbyState(e); },
+      onError:e=>{ if(e.target===player) onPlayerErr(e); else { preloadId=null; preloadReady=false; } }
+    }
   });
+}
+function onYouTubeIframeAPIReady(){
+  players=[mkPlayer('yt-player'), mkPlayer('yt-player-2')];
+  player=players[0];
+}
+/* Which track Next would pick. Shuffle chooses at play time, so it can't be
+   predicted — those queues simply go unpreloaded rather than guessing wrong. */
+function peekNextIndex(){
+  if(!queue.length||shuffle) return -1;
+  if(qIndex<queue.length-1) return qIndex+1;
+  return repeat===1 ? 0 : -1;
+}
+function preloadNext(){
+  const i=peekNextIndex(); if(i<0) return;
+  const nx=queue[i]; if(!nx||!nx.id||nx.id===preloadId) return;
+  preloadId=nx.id; preloadReady=false;
+  try{ const sb=standby(); sb.mute(); sb.loadVideoById(nx.id); }
+  catch(e){ preloadId=null; }
+}
+/* The standby player is muted and offscreen: let it run far enough to prove the
+   stall is over, then park it at 0 so the swap starts the track from the top. */
+function onStandbyState(e){
+  if(e.data!==YT.PlayerState.PLAYING||preloadReady) return;
+  preloadReady=true;
+  try{ e.target.pauseVideo(); e.target.seekTo(0,true); }catch(err){}
+}
+function swapToStandby(){
+  const old=player;
+  active=1-active; player=players[active];
+  try{ old.stopVideo(); }catch(e){}
+  try{
+    player.seekTo(0,true);
+    if(muted) player.mute(); else { player.unMute(); player.setVolume(volume); }
+    player.playVideo();
+  }catch(e){ preloadId=null; preloadReady=false; fallbackToAudio(); return; }
+  preloadId=null; preloadReady=false;
+  armWatchdog();
 }
 function onPlayerState(e){
   if(engine!=='yt')return; const S=YT.PlayerState;
-  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();stopWatchdog();try{player.setPlaybackRate(playbackRate);}catch(e){}}
+  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();stopWatchdog();try{player.setPlaybackRate(playbackRate);}catch(e){}
+    clearTimeout(preloadT); preloadT=setTimeout(preloadNext,4000);}  // let this track settle first
   else if(e.data===S.PAUSED){isPlaying=false;setPlayIcon(false);}
   else if(e.data===S.ENDED){ if((player.getDuration()||0)<1) fallbackToAudio(); else onTrackEnd(); }
 }
@@ -1213,6 +1264,8 @@ function playCurrent(){
   updateNowPlaying(t); refreshRowHighlight(); refreshFullNP();
   if(preferAudio){ toAudio(); return; }
   engine='yt'; ytStarted=false; try{audio.pause();}catch(e){} showThumb(false);
+  clearTimeout(preloadT);
+  if(preloadId===t.id && preloadReady){ swapToStandby(); return; }   // already warmed: instant
   try{ player.loadVideoById(t.id); }catch(e){ fallbackToAudio(); return; }
   armWatchdog();
 }
