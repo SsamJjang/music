@@ -1169,6 +1169,26 @@ let ytStarted=false;    // did YT actually begin the current track?
 let watchdog=null;      // catches silent YT failures (e.g. file://)
 let preferAudio=false;  // once YT proves it can't embed here, stop trying it
 let embedFails=0, failStreak=0, ticker=null;
+let audioWorked=false;  // has the Piped fallback ever actually produced sound?
+
+function stopWatchdog(){ clearTimeout(watchdog); clearInterval(watchdog); watchdog=null; }
+/* A pre-roll ad runs inside this same embed BEFORE the song, and the API doesn't
+   report PLAYING for the track until that ad finishes — which can take 30s. A fixed
+   deadline therefore fires on every ad and kills a player that was working fine.
+   Instead poll for signs of life (clock moving, or state playing/buffering — an ad
+   counts as all three) and only bail when the embed has been truly inert. */
+function armWatchdog(){
+  stopWatchdog();
+  let last=-1, idle=0;
+  watchdog=setInterval(()=>{
+    if(engine!=='yt'||ytStarted){ stopWatchdog(); return; }
+    let now=-1, st=-99;
+    try{ now=player.getCurrentTime(); st=player.getPlayerState(); }catch(e){}
+    if(now!==last||st===YT.PlayerState.PLAYING||st===YT.PlayerState.BUFFERING) idle=0; else idle++;
+    last=now;
+    if(idle>=10){ stopWatchdog(); fallbackToAudio(); }   // 10s of nothing at all
+  },1000);
+}
 
 function onYouTubeIframeAPIReady(){
   player=new YT.Player('yt-player',{
@@ -1179,7 +1199,7 @@ function onYouTubeIframeAPIReady(){
 }
 function onPlayerState(e){
   if(engine!=='yt')return; const S=YT.PlayerState;
-  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();clearTimeout(watchdog);try{player.setPlaybackRate(playbackRate);}catch(e){}}
+  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();stopWatchdog();try{player.setPlaybackRate(playbackRate);}catch(e){}}
   else if(e.data===S.PAUSED){isPlaying=false;setPlayIcon(false);}
   else if(e.data===S.ENDED){ if((player.getDuration()||0)<1) fallbackToAudio(); else onTrackEnd(); }
 }
@@ -1188,15 +1208,18 @@ function onPlayerErr(){ if(engine==='yt') fallbackToAudio(); } // 101/150 = embe
 function playCurrent(){
   const t=queue[qIndex]; if(!t)return;
   if(!ytReady){setTimeout(playCurrent,300);return;}
-  clearTimeout(watchdog);
+  stopWatchdog();
   lyrics=null; lyricIdx=-1; pushHistory(t);
   updateNowPlaying(t); refreshRowHighlight(); refreshFullNP();
   if(preferAudio){ toAudio(); return; }
   engine='yt'; ytStarted=false; try{audio.pause();}catch(e){} showThumb(false);
   try{ player.loadVideoById(t.id); }catch(e){ fallbackToAudio(); return; }
-  watchdog=setTimeout(()=>{ if(engine==='yt' && !ytStarted) fallbackToAudio(); },5000);
+  armWatchdog();
 }
-function fallbackToAudio(){ clearTimeout(watchdog); embedFails++; if(embedFails>=2) preferAudio=true; toAudio(); }
+/* Only stop trying YouTube if the audio fallback has actually worked at least once —
+   otherwise a couple of ad-related stumbles permanently route every track to a
+   fallback that can't play anything, and the player goes silent for the session. */
+function fallbackToAudio(){ stopWatchdog(); embedFails++; if(embedFails>=2&&audioWorked) preferAudio=true; toAudio(); }
 
 async function toAudio(){
   const t=queue[qIndex]; if(!t)return;
@@ -1220,7 +1243,7 @@ async function pipedStreamUrl(id){
   const pick=a.find(s=>/mp4|m4a|aac/i.test((s.mimeType||'')+(s.codec||'')))||a[0];
   return pick&&pick.url;
 }
-audio.addEventListener('playing',()=>{if(engine==='audio'){failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();}});
+audio.addEventListener('playing',()=>{if(engine==='audio'){audioWorked=true;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();}});
 audio.addEventListener('pause',()=>{if(engine==='audio'){isPlaying=false;setPlayIcon(false);}});
 audio.addEventListener('ended',()=>{if(engine==='audio')onTrackEnd();});
 
