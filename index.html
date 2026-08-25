@@ -419,6 +419,7 @@ let shuffleMap = load(K.shuffleMap, {});     // { playlistId | 'liked': true/fal
 let customLyrics = load(K.customLyrics, {}); // { trackId: raw LRC/plain text }, overrides LRCLIB
 
 let queue=[], qIndex=-1, player=null, ytReady=false;
+let shuffleOrder=[], shufflePos=-1;   // shuffled pass: track ids in play order, and where we are in it
 let curType='song', lastQuery='', isPlaying=false, shuffle=false, repeat=0, seeking=false;
 let history  = load(K.history, []);   // recently played tracks
 let searches = load(K.searches, []);  // recent search queries
@@ -854,7 +855,8 @@ function updateShuffleBtn(){ const b=$('#btn-shuffle'); if(b) b.classList.toggle
 function playListFrom(tracks,ctx){
   if(!tracks||!tracks.length)return;
   queue=tracks.slice(); setContext(ctx);
-  qIndex=(shuffle&&queue.length>1)?Math.floor(Math.random()*queue.length):0;
+  if(shuffle&&queue.length>1){ buildShuffleOrder(); qIndex=queue.findIndex(t=>t.id===shuffleOrder[0]); }
+  else qIndex=0;
   playCurrent();
 }
 function refreshEq(){
@@ -1214,10 +1216,15 @@ function onYouTubeIframeAPIReady(){
   players=[mkPlayer('yt-player'), mkPlayer('yt-player-2')];
   player=players[0];
 }
-/* Which track Next would pick. Shuffle chooses at play time, so it can't be
-   predicted — those queues simply go unpreloaded rather than guessing wrong. */
+/* Which track Next would pick. Shuffle draws from a pre-built pass, so it's
+   predictable too — only the track after a pass ends goes unpreloaded, since
+   that one comes out of a reshuffle that hasn't happened yet. */
 function peekNextIndex(){
-  if(!queue.length||shuffle) return -1;
+  if(!queue.length) return -1;
+  if(shuffle){
+    if(shufflePos<0||shufflePos>=shuffleOrder.length-1) return -1;
+    return queue.findIndex(t=>t.id===shuffleOrder[shufflePos+1]);
+  }
   if(qIndex<queue.length-1) return qIndex+1;
   return repeat===1 ? 0 : -1;
 }
@@ -1258,6 +1265,9 @@ function onPlayerErr(){ if(engine==='yt') fallbackToAudio(); } // 101/150 = embe
 
 function playCurrent(){
   const t=queue[qIndex]; if(!t)return;
+  // jumped in from outside the pass (row click, new queue): start a fresh pass here,
+  // so the songs the pass had already stepped over still get their turn
+  if(shuffle&&shuffleOrder[shufflePos]!==t.id) buildShuffleOrder(t.id);
   if(!ytReady){setTimeout(playCurrent,300);return;}
   stopWatchdog();
   lyrics=null; lyricIdx=-1; pushHistory(t);
@@ -1326,18 +1336,57 @@ function eSeek(s){if(engine==='audio')audio.currentTime=s; else if(player&&playe
 function ePlayPause(){if(engine==='audio'){audio.paused?audio.play():audio.pause();}else{if(!ytReady)return;isPlaying?player.pauseVideo():player.playVideo();}}
 function togglePlay(){if(qIndex<0)return;ePlayPause();}
 function setPlayIcon(p){$('#play-ico').innerHTML=p?'<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>':'<path d="M8 5v14l11-7z"/>';$('#btn-play').title=p?'Pause':'Play';refreshEq();}
+/* ---------- shuffled pass ----------
+   Shuffle is a permutation of the queue played straight through, not a random pick
+   per track: every song plays once before any song comes round again. */
+function buildShuffleOrder(startId,avoidFirstId){
+  const ids=queue.map(t=>t.id);
+  for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}
+  if(startId){ const k=ids.indexOf(startId); if(k>0){ids.splice(k,1);ids.unshift(startId);} }
+  // a fresh pass shouldn't open with the song that just closed the previous one
+  else if(avoidFirstId&&ids.length>1&&ids[0]===avoidFirstId){const j=1+Math.floor(Math.random()*(ids.length-1));[ids[0],ids[j]]=[ids[j],ids[0]];}
+  shuffleOrder=ids; shufflePos=0;
+}
+/* The queue can be edited mid-pass (add/remove/reorder), so reconcile before using it:
+   drop what's gone, slot new tracks in at random among the ones still to come. */
+function syncShuffleOrder(){
+  const curId=queue[qIndex]&&queue[qIndex].id;
+  if(!shuffleOrder.length){ buildShuffleOrder(curId); return; }
+  const inQueue=new Set(queue.map(t=>t.id)), known=new Set(shuffleOrder);
+  if(shuffleOrder.some(id=>!inQueue.has(id))){
+    const cur=shuffleOrder[shufflePos];
+    shuffleOrder=shuffleOrder.filter(id=>inQueue.has(id));
+    const k=shuffleOrder.indexOf(cur); shufflePos=k<0?Math.min(shufflePos,shuffleOrder.length-1):k;
+  }
+  queue.forEach(t=>{ if(!known.has(t.id)){ const lo=shufflePos+1; shuffleOrder.splice(lo+Math.floor(Math.random()*(shuffleOrder.length-lo+1)),0,t.id); } });
+  if(curId){ const k=shuffleOrder.indexOf(curId); if(k>=0) shufflePos=k; }
+}
 function playNext(){if(!queue.length)return;
-  if(shuffle)qIndex=Math.floor(Math.random()*queue.length);
+  if(shuffle){
+    syncShuffleOrder();
+    if(shufflePos<shuffleOrder.length-1) shufflePos++;
+    else if(repeat===1) buildShuffleOrder(null,shuffleOrder[shufflePos]); // pass finished: reshuffle for the next one
+    else return;                                                          // every song has played once — that's the end
+    const i=queue.findIndex(t=>t.id===shuffleOrder[shufflePos]); if(i<0)return;
+    qIndex=i;
+  }
   else if(qIndex<queue.length-1)qIndex++;
   else if(repeat===1)qIndex=0; else return;
   playCurrent();}
 function playPrev(){if(!queue.length)return;
   if(eTime()>3){eSeek(0);return;}
+  if(shuffle){
+    syncShuffleOrder();
+    if(shufflePos>0){ const i=queue.findIndex(t=>t.id===shuffleOrder[shufflePos-1]); if(i>=0){shufflePos--;qIndex=i;playCurrent();return;} }
+    eSeek(0); return;
+  }
   if(qIndex>0){qIndex--;playCurrent();}else eSeek(0);}
 function onTrackEnd(){if(repeat===2){eSeek(0);ePlayPause();return;}playNext();}
 function toggleShuffle(){
   shuffle=!shuffle;
   if(nowContext){ shuffleMap[nowContext]=shuffle; persistShuffleMap(); }
+  if(shuffle) buildShuffleOrder(queue[qIndex]&&queue[qIndex].id); // pass starts from what's playing now
+  else { shuffleOrder=[]; shufflePos=-1; }
   updateShuffleBtn();
 }
 function toggleRepeat(){repeat=(repeat+1)%3;const b=$('#btn-repeat');b.classList.toggle('on',repeat>0);b.title=['Repeat','Repeat all','Repeat one'][repeat];
