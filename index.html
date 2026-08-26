@@ -1528,7 +1528,17 @@ function syncLyrics(cur){
     l.querySelectorAll('.kw').forEach(w=>{w.style.removeProperty('--wf');});
   });
   const a=box.querySelector('.lyric-line[data-i="'+idx+'"]');
-  if(a){a.classList.add('active'); if(lyricSettings.mode!=='zen') a.scrollIntoView({block:'center',behavior:'smooth'});}
+  if(a){a.classList.add('active'); if(lyricSettings.mode!=='zen') centerLyric(box,a,true);}
+}
+/* Scroll ONLY the lyrics box. scrollIntoView() walks up and scrolls every
+   scrollable ancestor — including #np-full, which is overflow:hidden but still
+   programmatically scrollable — which pushed the top bar (and the close button)
+   out of the viewport as the lyrics progressed. */
+function centerLyric(box,a,smooth){
+  const br=box.getBoundingClientRect(), ar=a.getBoundingClientRect();
+  const target=box.scrollTop+(ar.top-br.top)-(box.clientHeight-a.offsetHeight)/2;
+  const max=Math.max(0,box.scrollHeight-box.clientHeight);
+  box.scrollTo({top:Math.max(0,Math.min(max,target)),behavior:smooth?'smooth':'auto'});
 }
 /* per-frame karaoke fill — smooth, interpolated between the coarse player clock */
 let fxRAF=null;
@@ -1570,6 +1580,8 @@ function ensureFull(){
     </div>
     <div class="npf-settings" id="npf-settings"></div>`;
   document.body.appendChild(ov);
+  // belt-and-braces: nothing may ever scroll the overlay itself off-screen
+  ov.addEventListener('scroll',()=>{ov.scrollTop=0;ov.scrollLeft=0;});
   ov.querySelector('.npf-close').onclick=closeFullNP;
   ov.querySelector('.npf-editlyrics').onclick=showLyricsModal;
   ov.querySelector('.npf-gear').onclick=()=>$('#npf-settings').classList.toggle('open');
@@ -1577,7 +1589,7 @@ function ensureFull(){
   buildSettingsPanel();
   return ov;
 }
-function openFullNP(){ if(qIndex<0){toast('Nothing playing');return;} const ov=ensureFull(); ov.style.display='flex'; applyFxClasses(); buildFullNP(); if(!fxRAF) fxLoop(); }
+function openFullNP(){ if(qIndex<0){toast('Nothing playing');return;} const ov=ensureFull(); ov.style.display='flex'; ov.scrollTop=0; applyFxClasses(); buildFullNP(); if(!fxRAF) fxLoop(); }
 function closeFullNP(){ const ov=$('#np-full'); if(ov)ov.style.display='none'; }
 function refreshFullNP(){ const ov=$('#np-full'); if(ov&&ov.style.display!=='none') buildFullNP(); }
 function applyFxClasses(){
