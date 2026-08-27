@@ -699,7 +699,7 @@ function showHome(){
 }
 function chipSearch(q){ curType='song'; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.type==='song')); $('#search').value=q; runSearch(); }
 function recentCard(t){
-  const c=el('div','card');
+  const c=el('div','card'); c.dataset.id=t.id;   // so hovering it warms the track
   c.innerHTML=`<div class="art"><img loading="lazy" src="${esc(tImg(t))}" onerror="this.style.opacity=0"></div>
     <button class="play-fab"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
     <div class="c-title">${esc(t.title)}</div><div class="c-sub">${esc(t.artist||'')}</div>`;
@@ -1188,7 +1188,15 @@ function armWatchdog(){
     try{ now=player.getCurrentTime(); st=player.getPlayerState(); }catch(e){}
     if(now!==last||st===YT.PlayerState.PLAYING||st===YT.PlayerState.BUFFERING) idle=0; else idle++;
     last=now;
-    if(idle>=5){ stopWatchdog(); fallbackToAudio(); }   // 5s frozen solid = really dead
+    // 5s was too short and was a large part of the "randomly doesn't load".
+    // YouTube's ad-check path does not merely delay the track -- while it is hanging
+    // the embed sits in UNSTARTED with the clock at 0, which is indistinguishable
+    // from dead by every signal above, and a blocked check regularly runs past five
+    // seconds. So the watchdog was shooting working players and handing the track to
+    // Piped, which by this file's own account is mostly dead: a slow song became a
+    // failed one. Waiting longer costs a few seconds in the genuinely-dead case; not
+    // waiting costs the track.
+    if(idle>=12){ stopWatchdog(); fallbackToAudio(); }
   },1000);
 }
 
@@ -1204,7 +1212,13 @@ function standby(){ return players[1-active]; }
 function mkPlayer(divId){
   return new YT.Player(divId,{
     height:'66',width:'66',host:'https://www.youtube.com',
-    playerVars:{controls:0,disablekb:1,modestbranding:1,playsinline:1,rel:0},
+    // origin is what lets the player skip a chunk of its own handshake; it must be
+    // omitted on file://, where the origin is the string "null" and passing it makes
+    // the embed refuse to load at all.
+    playerVars:Object.assign(
+      {controls:0,disablekb:1,modestbranding:1,playsinline:1,rel:0},
+      /^https?:$/.test(location.protocol)?{origin:location.origin}:{}
+    ),
     events:{
       onReady:()=>{ytReady=true;try{player.setVolume(volume);}catch(e){}},
       onStateChange:e=>{ (e.target===player) ? onPlayerState(e) : onStandbyState(e); },
@@ -1228,13 +1242,60 @@ function peekNextIndex(){
   if(qIndex<queue.length-1) return qIndex+1;
   return repeat===1 ? 0 : -1;
 }
-function preloadNext(){
-  const i=peekNextIndex(); if(i<0) return;
-  const nx=queue[i]; if(!nx||!nx.id||nx.id===preloadId) return;
-  preloadId=nx.id; preloadReady=false;
-  try{ const sb=standby(); sb.mute(); sb.loadVideoById(nx.id); }
+/* Put a track into the standby player. The stall is YouTube's ad-check timing out
+   against the blocker, and it is the same length whoever asks for it -- so the only
+   thing that makes a song start faster is having asked EARLIER. Everything below is
+   a different guess about when "earlier" is. */
+function warmTrack(id){
+  if(!id||!ytReady||preferAudio) return;
+  if(id===preloadId) return;                          // already warming this one
+  const cur=queue[qIndex];
+  if(cur&&cur.id===id&&engine==='yt') return;         // it is the audible track already
+  preloadId=id; preloadReady=false;
+  try{ const sb=standby(); sb.mute(); sb.loadVideoById(id); }
   catch(e){ preloadId=null; }
 }
+function preloadNext(){
+  const i=peekNextIndex(); if(i<0) return;
+  const nx=queue[i]; if(!nx) return;
+  warmTrack(nx.id);
+}
+
+/* Warming what the POINTER is over, which is the only advance notice a click gives.
+   A row click was the worst case in the whole player: the next track gets warmed
+   while the current one plays, but a song picked out of a list is cold every time,
+   and that is the several-second wait that reads as "it takes so long to load a
+   song now".
+
+   Hovering is not a promise to click, so this is debounced -- a pointer crossing a
+   list on its way somewhere else must not fire a load per row -- and it is allowed
+   to displace the next-track warm-up: an explicit hover is a much better prediction
+   than the queue order, and the next track gets warmed again from the PLAYING
+   handler anyway. pointerdown warms immediately and without the debounce, which
+   covers a touch (no hover to work from) and a fast, decisive click. */
+let hoverWarmT=null, warmRestoreT=null;
+function warmFromEvent(e,instant){
+  if(!e.target||!e.target.closest) return;
+  // The like, add and remove buttons live inside a row and do not play it. Warming
+  // from those would hand the standby a track nobody asked for and quietly cost the
+  // real next track its head start.
+  if(e.target.closest('button')) return;
+  const host=e.target.closest('[data-id]');
+  const id=host&&host.dataset&&host.dataset.id;
+  clearTimeout(hoverWarmT);
+  if(!id) return;
+  if(instant) warmTrack(id);
+  else hoverWarmT=setTimeout(()=>warmTrack(id),200);
+  // A hover that never becomes a click has taken the standby away from the track
+  // that is actually coming next. Give it back if nothing has happened since.
+  clearTimeout(warmRestoreT);
+  warmRestoreT=setTimeout(()=>{ if(preloadId===id) preloadNext(); },10000);
+}
+document.addEventListener('pointerover',e=>warmFromEvent(e,false),{passive:true});
+document.addEventListener('pointerdown',e=>warmFromEvent(e,true),{passive:true});
+document.addEventListener('pointerout',e=>{
+  if(!e.relatedTarget||!e.relatedTarget.closest||!e.relatedTarget.closest('[data-id]')) clearTimeout(hoverWarmT);
+},{passive:true});
 /* The standby player is muted and offscreen: let it run far enough to prove the
    stall is over, then park it at 0 so the swap starts the track from the top. */
 function onStandbyState(e){
@@ -1247,7 +1308,11 @@ function swapToStandby(){
   active=1-active; player=players[active];
   try{ old.stopVideo(); }catch(e){}
   try{
-    player.seekTo(0,true);
+    // Only if it is not already at the top. The standby parks itself at 0 when it
+    // finishes warming, and seeking a paused player to where it already is still
+    // costs a rebuffer -- which is a gap, in the one path that exists to remove one.
+    let at=0; try{ at=player.getCurrentTime()||0; }catch(err){}
+    if(at>0.5) player.seekTo(0,true);
     if(muted) player.mute(); else { player.unMute(); player.setVolume(volume); }
     player.playVideo();
   }catch(e){ preloadId=null; preloadReady=false; fallbackToAudio(); return; }
@@ -1256,12 +1321,36 @@ function swapToStandby(){
 }
 function onPlayerState(e){
   if(engine!=='yt')return; const S=YT.PlayerState;
-  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;isPlaying=true;setPlayIcon(true);startTicker();stopWatchdog();try{player.setPlaybackRate(playbackRate);}catch(e){}
-    clearTimeout(preloadT); preloadT=setTimeout(preloadNext,4000);}  // let this track settle first
+  if(e.data===S.PLAYING){ytStarted=true;embedFails=0;failStreak=0;ytRetriedId=null;isPlaying=true;setPlayIcon(true);startTicker();stopWatchdog();try{player.setPlaybackRate(playbackRate);}catch(e){}
+    // 1.5s, not 4s. The standby is muted and loading in parallel, so the only reason
+    // to wait at all is to let the audible track get its own buffer first -- and a
+    // 4s head start plus a ~5s stall meant a skip inside the first ten seconds of a
+    // song always landed on a cold player.
+    clearTimeout(preloadT); preloadT=setTimeout(preloadNext,1500);}
   else if(e.data===S.PAUSED){isPlaying=false;setPlayIcon(false);}
   else if(e.data===S.ENDED){ if((player.getDuration()||0)<1) fallbackToAudio(); else onTrackEnd(); }
 }
-function onPlayerErr(){ if(engine==='yt') fallbackToAudio(); } // 101/150 = embedding disabled
+/* Codes that say this video will never play in this embed, whatever we do:
+   2 = malformed id, 100 = gone/private, 101 & 150 = embedding disabled by the owner.
+   Everything else -- notably 5, the HTML5 player's own generic failure -- is a
+   maybe, and under an ad blocker a maybe is usually a timeout on the ad check
+   rather than anything wrong with the video. */
+const YT_DEAD_CODES=new Set([2,100,101,150]);
+let ytRetriedId=null;
+function onPlayerErr(e){
+  if(engine!=='yt') return;
+  const code=e&&e.data, t=queue[qIndex];
+  // One retry on the same player before giving up on YouTube, because what we give
+  // up TO is Piped, which this file already documents as largely dead -- so treating
+  // a transient error as fatal turned a track that would have played on the second
+  // ask into a track that did not play at all. One retry only: a video that is
+  // genuinely broken must not loop.
+  if(t&&code!==undefined&&!YT_DEAD_CODES.has(code)&&ytRetriedId!==t.id){
+    ytRetriedId=t.id;
+    try{ player.loadVideoById(t.id); armWatchdog(); return; }catch(err){}
+  }
+  fallbackToAudio();
+}
 
 function playCurrent(){
   const t=queue[qIndex]; if(!t)return;
@@ -1275,7 +1364,12 @@ function playCurrent(){
   if(preferAudio){ toAudio(); return; }
   engine='yt'; ytStarted=false; try{audio.pause();}catch(e){} showThumb(false);
   clearTimeout(preloadT);
-  if(preloadId===t.id && preloadReady){ swapToStandby(); return; }   // already warmed: instant
+  // preloadReady is NOT required. If the standby is holding this track it has had a
+  // head start on the stall, and swapping to it is at worst exactly a cold load --
+  // which is what the other branch does. Requiring "ready" meant a track that was
+  // 90% of the way through warming got thrown away and started again from nothing,
+  // and that is the gap that showed up on a fast skip or a short song.
+  if(preloadId===t.id){ swapToStandby(); return; }
   try{ player.loadVideoById(t.id); }catch(e){ fallbackToAudio(); return; }
   armWatchdog();
 }
