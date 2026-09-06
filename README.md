@@ -46,6 +46,11 @@ the same project share one 10,000/day budget. To actually add quota:
 
 - 🔍 Search **Songs**, **Artists**, and **Albums**, filtered to *real songs*
   (no reactions/covers/live/sped-up), ranked audio-first like YouTube Music
+- 🔗 **Paste a YouTube link** into the search box to play that exact video — the
+  song filters are skipped, so one-off uploads by random channels (which keyword
+  search deliberately hides) still play. Video, `youtu.be`, Shorts, playlist and
+  channel links all work; a video link costs **1 quota unit** instead of 100, and
+  resolves with **no API key at all** via the free backup
 - ▶️ Full playback: play/pause, next/prev, seek, volume/mute, shuffle & repeat
 - 🎤 **Synced lyrics** (from LRCLIB) — lines highlight in time and are
   click-to-seek. Open the **full-screen Now Playing** view (click the track,

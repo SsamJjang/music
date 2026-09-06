@@ -311,7 +311,7 @@
     <div class="topbar">
       <div class="search-wrap">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 2a8 8 0 105.3 14l5.4 5.3 1.4-1.4-5.3-5.4A8 8 0 0010 2zm0 2a6 6 0 110 12 6 6 0 010-12z"/></svg>
-        <input id="search" type="text" placeholder="What do you want to listen to?" autocomplete="off">
+        <input id="search" type="text" placeholder="Search, or paste a YouTube link" autocomplete="off">
       </div>
       <div class="tabs" id="tabs">
         <button class="tab active" data-type="song">Songs</button>
@@ -571,11 +571,12 @@ async function dataSearch(q,type,force){
   return r;
 }
 async function dataEntityTracks(it,force){
-  const ck='e|'+it.kind+'|'+it.id;
+  const raw=!!it.raw;
+  const ck='e|'+it.kind+'|'+(raw?'raw|':'')+it.id;
   if(!force){const c=cacheGet(ck); if(c) return c;}
   const {items}=await ytOrPiped(
-    key => it.kind==='artist' ? ytChannelUploads(it.id,key) : ytPlaylistItems(it.id,key),
-    ()  => it.kind==='artist' ? pipedArtistTracks(it.id)    : pipedAlbumTracks(it.id)
+    key => it.kind==='artist' ? ytChannelUploads(it.id,key,raw) : ytPlaylistItems(it.id,key),
+    ()  => it.kind==='artist' ? pipedArtistTracks(it.id,raw)    : pipedAlbumTracks(it.id)
   );
   cacheSet(ck,items);
   return items;
@@ -603,11 +604,16 @@ async function ytSearch(q,type,key){
   if(type==='album') return refineAlbums(items);
   return items;
 }
-async function ytChannelUploads(channelId,key){
-  const p=new URLSearchParams({key,part:'snippet',channelId,type:'video',order:'viewCount',maxResults:'24',videoCategoryId:'10'});
+/* raw: a channel opened from a pasted link is browsed as-is - no music-category
+   pin, no song refining - because the whole point of the link was that channel's
+   own uploads, which the filters would have thrown away. */
+async function ytChannelUploads(channelId,key,raw){
+  const p=new URLSearchParams({key,part:'snippet',channelId,type:'video',order:raw?'date':'viewCount',maxResults:'24'});
+  if(!raw) p.set('videoCategoryId','10');
   const res=await fetch(`${API}/search?${p}`); if(!res.ok) throw await apiError(res);
   const d=await res.json();
-  return refineSongs((d.items||[]).map(it=>mapYT(it,'song')).filter(Boolean));
+  const items=(d.items||[]).map(it=>mapYT(it,'song')).filter(Boolean);
+  return raw?items:refineSongs(items);
 }
 async function ytPlaylistItems(playlistId,key){
   const p=new URLSearchParams({key,part:'snippet',playlistId,maxResults:'50'});
@@ -667,7 +673,7 @@ function mapPiped(it,type){
 }
 function streamToTrack(s){const id=vidId(s.url); if(!id)return null;
   return {id,title:cleanTitle(s.title),artist:s.uploaderName||'',thumb:s.thumbnail||''};}
-async function pipedArtistTracks(id){const d=await pipedFetch('/channel/'+id); return refineSongs((d.relatedStreams||[]).map(streamToTrack).filter(Boolean));}
+async function pipedArtistTracks(id,raw){const d=await pipedFetch('/channel/'+id); const items=(d.relatedStreams||[]).map(streamToTrack).filter(Boolean); return raw?items:refineSongs(items);}
 async function pipedAlbumTracks(id){const d=await pipedFetch('/playlists/'+id); return (d.relatedStreams||[]).map(streamToTrack).filter(Boolean);}
 
 /* ============================================================
@@ -709,9 +715,140 @@ function recentCard(t){
   return c;
 }
 
-async function runSearch(force){
+/* ============================================================
+   PASTE-A-LINK  (escape hatch out of the "real songs" filters)
+   ------------------------------------------------------------
+   Song search is deliberately narrow: ytSearch pins videoCategoryId=10 and
+   refineSongs drops reactions/covers/live/etc, so a one-off upload by a random
+   channel is unreachable by keyword. Pasting its URL bypasses both filters and
+   plays the exact video. Resolving one video costs 1 quota unit (a search costs
+   100), and the result is cached, so re-pasting the same link is free. */
+const LINK_RE = /(?:youtube\.com|youtu\.be|youtube-nocookie\.com)/i;
+function parseYTLink(raw){
+  const s=(raw||'').trim();
+  if(/^[\w-]{11}$/.test(s)) return {kind:'song',id:s,bare:true}; // maybe a bare video id
+  if(!LINK_RE.test(s)) return null;
+  let u; try{ u=new URL(s.startsWith('http')?s:'https://'+s); }catch(e){ return null; }
+  const host=u.hostname.replace(/^www\./,''), path=u.pathname, qp=u.searchParams;
+  const ok=id=>/^[\w-]{11}$/.test(id||'');
+
+  // youtu.be/ID
+  if(host==='youtu.be'){ const id=path.slice(1).split('/')[0]; if(ok(id)) return {kind:'song',id}; }
+  // /watch?v=ID  (a &list= alongside it is ignored — the video is what was linked)
+  if(ok(qp.get('v'))) return {kind:'song',id:qp.get('v')};
+  // /shorts/ID, /embed/ID, /live/ID, /v/ID
+  const m=path.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/); if(m) return {kind:'song',id:m[1]};
+  // /playlist?list=ID  (or any bare list= with no video)
+  const list=qp.get('list'); if(list) return {kind:'album',id:list,title:'Playlist'};
+  // /channel/UC...
+  const ch=path.match(/^\/channel\/([\w-]+)/); if(ch) return {kind:'artist',id:ch[1],title:'Channel'};
+  // /@handle, /c/name, /user/name — no id in the URL, so fall back to a name search
+  const h=path.match(/^\/(?:@([^/?]+)|c\/([^/?]+)|user\/([^/?]+))/);
+  if(h) return {kind:'handle',q:decodeURIComponent(h[1]||h[2]||h[3])};
+  return null;
+}
+
+/* Metadata for one video id: key pool (1 unit) -> Piped -> YouTube oEmbed.
+   oEmbed is keyless, CORS-enabled and quota-free, so a link still resolves with
+   no API key at all and even when every key is spent. */
+async function ytVideoMeta(id,key){
+  const p=new URLSearchParams({key,part:'snippet',id});
+  const res=await fetch(`${API}/videos?${p}`); if(!res.ok) throw await apiError(res);
+  const d=await res.json(); const it=(d.items||[])[0];
+  if(!it) throw new Error('That video is unavailable (deleted, private, or the link is wrong).');
+  return {id,title:cleanTitle(it.snippet.title),artist:decode(it.snippet.channelTitle||''),thumb:thumbOf(it.snippet)};
+}
+async function pipedVideoMeta(id){
+  const d=await pipedFetch('/streams/'+id,7000);
+  if(!d||!d.title) throw new Error('That video is unavailable (deleted, private, or the link is wrong).');
+  return {id,title:cleanTitle(d.title),artist:d.uploader||'',thumb:d.thumbnailUrl||''};
+}
+async function oembedVideoMeta(id){
+  const r=await fetchT('https://www.youtube.com/oembed?format=json&url='+encodeURIComponent('https://www.youtube.com/watch?v='+id),7000);
+  if(!r.ok) throw new Error('That video is unavailable (deleted, private, or the link is wrong).');
+  const d=await r.json();
+  return {id,title:cleanTitle(d.title||''),artist:decode(d.author_name||''),thumb:d.thumbnail_url||''};
+}
+async function resolveVideo(id,force){
+  const ck='v|'+id;
+  if(!force){const c=cacheGet(ck); if(c&&c[0]) return {track:c[0],source:'saved'};}
+  let track=await withKeys(k=>ytVideoMeta(id,k)), source='youtube';
+  if(!track){ try{ track=await pipedVideoMeta(id); source='piped'; }catch(e){} }
+  if(!track){ track=await oembedVideoMeta(id); source='piped'; }   // throws if truly gone
+  cacheSet(ck,[track]);
+  return {track,source};
+}
+/* Title for a pasted playlist link, so the header isn't just "Playlist". */
+async function resolveListTitle(id){
+  const via=await withKeys(async key=>{
+    const res=await fetch(`${API}/playlists?${new URLSearchParams({key,part:'snippet',id})}`);
+    if(!res.ok) throw await apiError(res);
+    const it=((await res.json()).items||[])[0];
+    return it?{title:decode(it.snippet.title),sub:decode(it.snippet.channelTitle||''),thumb:thumbOf(it.snippet)}:null;
+  });
+  if(via) return via;
+  try{ const d=await pipedFetch('/playlists/'+id,7000);
+       return {title:d.name||'Playlist',sub:d.uploader||'',thumb:d.thumbnailUrl||''}; }catch(e){}
+  return {title:'Playlist',sub:'',thumb:''};
+}
+
+/* Name/avatar for a pasted channel link, so the header isn't a bare "Channel". */
+async function resolveChannelMeta(id){
+  const via=await withKeys(async key=>{
+    const res=await fetch(`${API}/channels?${new URLSearchParams({key,part:'snippet',id})}`);
+    if(!res.ok) throw await apiError(res);
+    const it=((await res.json()).items||[])[0];
+    return it?{title:decode(it.snippet.title),sub:'Channel',thumb:thumbOf(it.snippet)}:null;
+  });
+  if(via) return via;
+  try{ const d=await pipedFetch('/channel/'+id,7000);
+       return {title:d.name||'Channel',sub:'Channel',thumb:d.avatarUrl||''}; }catch(e){}
+  return {title:'Channel',sub:'',thumb:''};
+}
+
+async function runLink(link,force){
+  loading();
+  try{
+    if(link.kind==='handle'){                       // no id in the URL: search the name
+      curType='artist';
+      document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.type==='artist'));
+      $('#search').value=link.q; return runSearch(force);
+    }
+    if(link.kind==='song'){
+      const {track,source}=await resolveVideo(link.id,force);
+      viewTitle=track.title; updateTitle();
+      renderLinkedTrack(track,source);
+      queue=[trim(track)]; qIndex=0; setContext(null); playCurrent();
+      return;
+    }
+    if(link.kind==='album'){
+      const meta=await resolveListTitle(link.id);
+      return openEntity({kind:'album',id:link.id,title:meta.title,sub:meta.sub,thumb:meta.thumb},force);
+    }
+    if(link.kind==='artist'){
+      // raw:true — a linked channel is browsed as-is, not filtered down to music
+      const cm=await resolveChannelMeta(link.id);
+      return openEntity({kind:'artist',id:link.id,title:cm.title,sub:cm.sub,thumb:cm.thumb,raw:true},force);
+    }
+  }catch(e){
+    // A bare 11-char string that didn't resolve was just a word ("Evanescence").
+    if(link.bare) return runSearch(force,true);
+    renderError(e);
+  }
+}
+function renderLinkedTrack(track,source){
+  setActiveNav('search'); setActiveLib(null);
+  content.innerHTML=`<div class="section-title">From link</div>`+sourceBadge(source)+
+    `<div class="source-badge" style="margin-top:-6px">Filters skipped — this plays the exact video you linked.</div>`;
+  const rows=el('div','rows'); rows.appendChild(trackRow(track,0,[track])); content.appendChild(rows);
+}
+
+async function runSearch(force,skipLink){
   const q=$('#search').value.trim();
   if(!q){showHome();return;}
+  const link=skipLink?null:parseYTLink(q);
+  if(link&&link.kind!=='handle'){ lastQuery=q; pushSearch(q); return runLink(link,force); }
+  if(link) return runLink(link,force);          // handle: rewrites the box, re-enters here
   lastQuery=q; pushSearch(q); viewTitle='Search · '+q; updateTitle(); setActiveNav('search'); setActiveLib(null); loading();
   try{
     const {items,source}=await dataSearch(q,curType,force);
