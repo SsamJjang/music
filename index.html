@@ -2233,17 +2233,10 @@ async function dzBpm(t,m){
     const bpm=Math.round((+d.bpm||0)*100)/100; fxSet(t.id,'bpm',bpm); return bpm; }
   catch(e){ return 0; }
 }
-/* the best art we have right now: Deezer's sleeve if it answers in time, else YouTube's frame */
-function artFor(t,ms){
-  const fb={big:tImgHi(t),small:tImg(t)};
-  const p=dzMeta(t).then(m=>m&&m.cover?{big:m.cover,small:m.coverS||m.cover}:fb,()=>fb);
-  return Promise.race([p,new Promise(r=>setTimeout(()=>r(fb),ms||900))]);
-}
-function artSync(t,size){
-  const m=t&&fxGet(t.id,'dz');
-  if(m&&m.cover) return size==='s'?(m.coverS||m.cover):size==='m'?(m.coverM||m.cover):m.cover;
-  return size==='xl'?tImgHi(t):tImg(t);
-}
+/* Art is always the video's own thumbnail. Deezer's sleeve can belong to a different
+   release of the song (single vs album vs extended cut), so it's only used for tempo. */
+function artFor(t){ return Promise.resolve({big:tImgHi(t),small:tImg(t)}); }
+function artSync(t,size){ return size==='xl'?tImgHi(t):tImg(t); }
 
 /* ============================================================
    GROOVE — listen to the 30s preview once, offline
